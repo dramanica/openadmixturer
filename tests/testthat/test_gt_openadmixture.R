@@ -163,3 +163,29 @@ test_that("verbose progress is reported as messages", {
   expect_false(adm0$converged)
   expect_match(utils::tail(adm0$log[[1]], 2)[1], "after 0 iterations")
 })
+
+test_that("the log-likelihood is only computed when needed", {
+  small <- make_test_gt(sim$genotypes[1:40, 1:200])
+  # without verbose, EM priming is summarised in a single line
+  adm <- gt_openadmixture(small, k = 2, seed = 1)
+  log_lines <- adm$log[[1]]
+  expect_false(any(grepl("^EM iteration", log_lines)))
+  expect_true("EM priming: 5 iterations" %in% log_lines)
+  # the log-likelihood of the plain sweeps is only computed when the
+  # quasi-Newton step is rejected
+  iter_lines <- grep("^Iteration", log_lines, value = TRUE)
+  expect_true(any(grepl("basic = not computed", iter_lines)))
+  # with verbose, the log-likelihood is reported every 5 EM steps, and the
+  # estimates are the same
+  adm_v <- suppressMessages(
+    gt_openadmixture(small, k = 2, seed = 1, verbose = TRUE, n_em_iter = 10)
+  )
+  em_lines <- grep("^EM iteration", adm_v$log[[1]], value = TRUE)
+  expect_identical(
+    sub(":.*", "", em_lines),
+    c("EM iteration 5", "EM iteration 10")
+  )
+  adm_10 <- gt_openadmixture(small, k = 2, seed = 1, n_em_iter = 10)
+  expect_identical(adm_v$Q, adm_10$Q)
+  expect_identical(adm_v$loglik, adm_10$loglik)
+})

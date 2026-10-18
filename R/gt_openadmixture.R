@@ -100,6 +100,12 @@
 #'   - with missing data, the EM update of Q is normalised by the number of
 #'     loci observed in each individual (OpenADMIXTURE.jl divides by the
 #'     total number of loci, so that Q is pushed off the simplex);
+#'   - the log-likelihood is only computed when the algorithm needs it: not
+#'     after each EM step (unless `verbose = TRUE`), and, in the main
+#'     iterations, the log-likelihood after two plain updates only when the
+#'     quasi-Newton step is rejected (OpenADMIXTURE.jl computes both every
+#'     time). This saves about one pass over the genotypes in seven, without
+#'     changing the estimates; the log then reports "basic = not computed";
 #'   - a few numerical safeguards that the Julia code lacks: the conditioning
 #'     penalty of the quadratic program for Q is never negative, the
 #'     active-set solver never pivots on a vanishing element, Newton steps
@@ -151,7 +157,10 @@
 #' @param n_folds the number of folds used for cross-validation (defaults to
 #'   5, as in ADMIXTURE)
 #' @param n_cores the number of cores to use (defaults to 1)
-#' @param verbose boolean; should progress be printed (defaults to `FALSE`)
+#' @param verbose boolean; should progress be printed (defaults to `FALSE`)?
+#'   With `verbose = TRUE`, the log-likelihood is also computed (and logged)
+#'   every 5 EM steps during the initial EM iterations; otherwise only their
+#'   number is logged, as these values are not needed by the algorithm.
 #' @returns an object of class `gt_admix`, a list with elements:
 #' - `k` the number of clusters of each run
 #' - `Q` a list of [tidypopgen::q_matrix()] objects with the ancestry

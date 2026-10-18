@@ -67,7 +67,10 @@ they were observed; otherwise they are treated as missing (the default)}
 
 \item{n_cores}{the number of cores to use (defaults to 1)}
 
-\item{verbose}{boolean; should progress be printed (defaults to \code{FALSE})}
+\item{verbose}{boolean; should progress be printed (defaults to \code{FALSE})?
+With \code{verbose = TRUE}, the log-likelihood is also computed (and logged)
+every 5 EM steps during the initial EM iterations; otherwise only their
+number is logged, as these values are not needed by the algorithm.}
 }
 \value{
 an object of class \code{gt_admix}, a list with elements:
@@ -196,6 +199,12 @@ diploid);
 \item with missing data, the EM update of Q is normalised by the number of
 loci observed in each individual (OpenADMIXTURE.jl divides by the
 total number of loci, so that Q is pushed off the simplex);
+\item the log-likelihood is only computed when the algorithm needs it: not
+after each EM step (unless \code{verbose = TRUE}), and, in the main
+iterations, the log-likelihood after two plain updates only when the
+quasi-Newton step is rejected (OpenADMIXTURE.jl computes both every
+time). This saves about one pass over the genotypes in seven, without
+changing the estimates; the log then reports "basic = not computed";
 \item a few numerical safeguards that the Julia code lacks: the conditioning
 penalty of the quadratic program for Q is never negative, the
 active-set solver never pivots on a vanishing element, Newton steps

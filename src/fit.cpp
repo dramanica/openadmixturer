@@ -129,6 +129,19 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
   // algorithm of FRAPPE move the random start into a sensible region of the
   // parameter space; each step updates q and p simultaneously from the
   // current values (see oadm_em() in kernels.cpp).
+  //
+  // Deviation from OpenADMIXTURE.jl (logging only): Julia computes and
+  // prints the log-likelihood after every EM step. Those values are not used
+  // by the algorithm (EM runs a fixed number of steps, with no convergence
+  // test), and each costs a full pass over the genotypes, so we only compute
+  // them when the user is following progress (verbose = TRUE), and then only
+  // every EM_LOG_EVERY steps. Otherwise the log records just the number of
+  // EM steps; the log-likelihood after EM is reported anyway as the initial
+  // log-likelihood below. Estimates are not affected.
+  const int EM_LOG_EVERY = 5;
+  // log-likelihood of the current estimate if it has just been computed
+  // (after the last EM step), so that it can be reused below
+  double ll_after_em = R_NaN;
   if (init_q.isNull() || init_p.isNull()) {
     for (int it = 1; it <= n_em_iter; it++) {
       // the EM step writes into the spare buffers (q1, p1), which then
@@ -137,11 +150,17 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
       oadm_em(geno, q.data(), p.data(), k, q1.data(), p1.data(), n_cores);
       std::swap(q, q1);
       std::swap(p, p1);
-      const double ll = oadm_loglik(geno, q.data(), p.data(), k, n_cores);
-      log.add("EM iteration " + std::to_string(it) + ": loglikelihood = " +
-              fmt(ll, 12));
+      ll_after_em = R_NaN;
+      if (verbose && it % EM_LOG_EVERY == 0) {
+        ll_after_em = oadm_loglik(geno, q.data(), p.data(), k, n_cores);
+        log.add("EM iteration " + std::to_string(it) +
+                ": loglikelihood = " + fmt(ll_after_em, 12));
+      }
       // allow the user to interrupt (outside any parallel region)
       checkUserInterrupt();
+    }
+    if (n_em_iter > 0) {
+      log.add("EM priming: " + std::to_string(n_em_iter) + " iterations");
     }
   }
   // Starting values given by the user replace the corresponding block (as in
@@ -153,16 +172,21 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     NumericMatrix iq(init_q.get());
     for (size_t i = 0; i < I; i++)
       for (size_t kk = 0; kk < K; kk++) q[K * i + kk] = iq(i, kk);
+    ll_after_em = R_NaN;  // the estimate has changed
   }
   if (init_p.isNotNull()) {
     NumericMatrix ip(init_p.get());
     for (size_t j = 0; j < J; j++)
       for (size_t kk = 0; kk < K; kk++) p[K * j + kk] = ip(j, kk);
+    ll_after_em = R_NaN;  // the estimate has changed
   }
 
   // log-likelihood of the starting estimate; ll_history records it and then
-  // the log-likelihood at the end of every iteration
-  double ll_new = oadm_loglik(geno, q.data(), p.data(), k, n_cores);
+  // the log-likelihood at the end of every iteration. If it was computed
+  // after the last EM step (verbose fits) and the estimate has not changed
+  // since, it is reused rather than computed again.
+  double ll_new = ISNAN(ll_after_em) ?
+    oadm_loglik(geno, q.data(), p.data(), k, n_cores) : ll_after_em;
   log.add("Initial loglikelihood: " + fmt(ll_new, 12));
   std::vector<double> ll_history(1, ll_new);
 
@@ -193,10 +217,10 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     else oadm_update_q(geno, q1.data(), p1.data(), k, q2.data(), n_cores);
     if (fix_p) p2 = p1;
     else oadm_update_p(geno, q2.data(), p1.data(), k, p2.data(), n_cores);
-    // the log-likelihood after two plain sweeps, our fallback for this
-    // iteration
-    const double ll_basic =
-      oadm_loglik(geno, q2.data(), p2.data(), k, n_cores);
+    // The log-likelihood after the two plain sweeps, L(x2), is our fallback
+    // for this iteration, but it is only needed if the quasi-Newton step is
+    // rejected (see below), so it is computed only then.
+    double ll_basic = R_NaN;
 
     // Quasi-Newton acceleration: the maximum likelihood estimate is a fixed
     // point of the sweep, x = F(x). Each iteration gives a secant pair
@@ -229,11 +253,22 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     // Accepting an estimate swaps its buffers into (q, p); the buffers of
     // the previous estimate become spare and are overwritten in the next
     // iteration.
+    //
+    // Deviation from OpenADMIXTURE.jl (computation order only): Julia
+    // computes L(x2) in every iteration, before the quasi-Newton step. But
+    // the decision above compares L(x_qn) with ll_prev = L(x0), so L(x2) is
+    // only needed when the step is rejected, when x2 becomes the new
+    // estimate and L(x2) is used for the convergence test and as the next
+    // ll_prev. As the step is accepted in most iterations (typically 85-100%),
+    // computing L(x2) only after a rejection saves one of the six passes
+    // over the genotypes in most iterations, with identical results; only
+    // the log reports "basic = not computed" when L(x2) was not needed.
     if (std::isfinite(ll_qn) && ll_prev < ll_qn) {
       std::swap(q, qq);
       std::swap(p, pq);
       ll_new = ll_qn;
     } else {
+      ll_basic = oadm_loglik(geno, q2.data(), p2.data(), k, n_cores);
       std::swap(q, q2);
       std::swap(p, p2);
       ll_new = ll_basic;
@@ -245,8 +280,10 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     const double reldiff = std::fabs((ll_new - ll_prev) / ll_prev);
     log.add("Iteration " + std::to_string(iter) + ": loglikelihood = " +
             fmt(ll_new, 12) + ", reldiff = " + fmt(reldiff, 4) +
-            " (basic = " + fmt(ll_basic, 12) + ", QN = " + fmt(ll_qn, 12) +
-            ")");
+            " (basic = " +
+            (ISNAN(ll_basic) ? std::string("not computed") :
+             fmt(ll_basic, 12)) +
+            ", QN = " + fmt(ll_qn, 12) + ")");
     if (reldiff < rtol) {
       converged = true;
       break;

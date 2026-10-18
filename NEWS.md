@@ -21,3 +21,7 @@
   copies of P accumulated until R's garbage collector ran. On 60
   individuals x 1.5 million loci (K = 4), peak memory fell from about 34 to
   9 copies of the parameters. Results are unchanged.
+* Faster fits: the log-likelihood is only computed when the algorithm needs
+  it, skipping one of the six passes over the genotypes in most iterations
+  and the passes after each EM step (which are still reported every 5 steps
+  with `verbose = TRUE`). Estimates are unchanged.
