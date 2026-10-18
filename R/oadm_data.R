@@ -13,9 +13,15 @@
 #' @keywords internal
 #' @noRd
 oadm_prepare <- function(x, use_imputed = FALSE) {
+  # Everything the C++ code needs is gathered here, on the R side, so that the
+  # kernels only deal with plain vectors and a pointer to the backing file.
   if (!inherits(x, "gen_tbl")) {
     stop("'x' should be a gen_tibble", call. = FALSE)
   }
+  # The likelihood is binomial with n_i = 2 (diploids) or n_i = 1
+  # (pseudohaploids). tidypopgen codes a gen_tibble's ploidy as 2 (diploid),
+  # -2 (pseudohaploid, i.e. a mix of diploids and pseudohaploids), 0 (mixed
+  # ploidy) or k (uniform polyploid); only the first two are supported.
   ploidy <- tidypopgen::show_ploidy(x)
   if (!ploidy %in% c(2, -2)) {
     stop(
@@ -30,11 +36,22 @@ oadm_prepare <- function(x, use_imputed = FALSE) {
     )
   }
 
+  # The genotypes column of a gen_tibble is a vctrs vector whose data are the
+  # (1-based) rows of the FBM for each individual, and which carries the FBM
+  # as an attribute. The loci table records the FBM column of each locus in
+  # `big_index`. Filtering, reordering and select_loci() only change these
+  # indices, never the backing file, so we pass them on to C++; they can be
+  # in any order.
   fbm <- attr(x$genotypes, "fbm")
   rows <- vctrs::vec_data(x$genotypes)
   cols <- tidypopgen::show_loci(x)$big_index
 
   # decode raw bytes ourselves rather than relying on the live code256
+  # Bytes 0, 1 and 2 are the counts of the alternate allele (R indices 1:3
+  # correspond to bytes 0:2). Imputed genotypes are stored as bytes 4, 5 and
+  # 6 (bigsnpr's CODE_IMPUTE_PRED), and are only used if requested. Every
+  # other byte (including 3, the code for missing data) maps to NA, which the
+  # C++ code treats as missing.
   lut <- rep(NA_real_, 256)
   lut[1:3] <- 0:2
   if (use_imputed) {
@@ -48,6 +65,9 @@ oadm_prepare <- function(x, use_imputed = FALSE) {
       call. = FALSE
     )
   }
+  # n_trials is the number of allele copies of each individual (n_i in the
+  # binomial likelihood); scale converts the stored dosage into a count out
+  # of n_i (a stored 2 becomes 1 for a pseudohaploid individual)
   n_trials <- as.numeric(indiv_ploidy)
   scale <- n_trials / 2
 
@@ -86,6 +106,10 @@ oadm_decode <- function(data) {
 #' @keywords internal
 #' @noRd
 oadm_geno <- function(data) {
+  # The pointer wraps a C++ GenoView (src/geno_access.h), which holds the
+  # memory-mapped backing file and the decoding tables. Building it once
+  # avoids re-checking and copying the indices at every kernel call (there
+  # are several kernel calls per iteration).
   oadm_geno_ptr(
     data$fbm, data$rows, data$cols, data$lut,
     data$n_trials, data$scale

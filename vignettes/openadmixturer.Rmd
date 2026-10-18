@@ -287,9 +287,34 @@ autoplot(anole_adm,
   ggtitle("ADMIXTURE")
 ```
 
-Note that we only compare the Q matrices: ADMIXTURE reports allele
-frequencies for the other allele of each locus (the reference allele), so P
-matrices from the two methods are not directly comparable.
+## Allele frequencies
+
+So far we have only compared the Q matrices. Comparing the P matrices needs
+care, for two reasons:
+
+1. ADMIXTURE writes its P matrix with the loci sorted by chromosome and
+   position, rather than in the order of the input. In current releases of
+   `tidypopgen`, `gt_admixture()` does not undo this reordering, so the rows
+   of its P matrices do not match the loci of the `gen_tibble` when the loci
+   are not already sorted (as is the case for this dataset, whose chromosome
+   names are not numeric). A fix (EvolEcolGroup/tidypopgen#211) will soon be
+   available in the development version of `tidypopgen`.
+2. Even with the rows in the correct order, the two methods report the
+   frequency of different alleles: `gt_openadmixture()` gives the frequency
+   of the alternate allele (`allele_alt`), whilst ADMIXTURE gives the
+   frequency of the second allele in the PLINK bim file, which for a
+   `gen_tibble` is the reference allele (`allele_ref`). The P matrices of
+   ADMIXTURE therefore need to be flipped before comparing them with those of
+   `gt_openadmixture()`:
+
+```{r, eval = FALSE}
+# with a version of tidypopgen that includes the fix
+p_oa <- get_p_matrix(anole_oa, k = 3, run = best_run(anole_oa, 3))
+p_adm <- 1 - as.matrix(
+  get_p_matrix(anole_adm, k = 3, run = best_run(anole_adm, 3))
+)
+# columns should first be matched as for the Q matrices
+```
 
 # References
 

@@ -36,9 +36,38 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
                      fix_q = FALSE, fix_p = FALSE, max_iter = 1000,
                      rtol = 1e-7, n_em_iter = 5, n_qn = 3, n_cores = 1,
                      verbose = FALSE) {
+  # The model
+  # ---------
+  # For individual i and locus j, the genotype g_ij (the number of copies of
+  # the alternate allele, out of n_i = 2 for diploids or 1 for pseudohaploids)
+  # is binomial with probability
+  #   qp_ij = sum_k q_ki p_kj,
+  # where q_ki is the proportion of the genome of individual i coming from
+  # ancestral population k, and p_kj is the frequency of the alternate allele
+  # at locus j in population k. The log-likelihood (up to a constant) is
+  #   L = sum_ij g_ij log(qp_ij) + (n_i - g_ij) log(1 - qp_ij),
+  # summed over the non-missing genotypes. We maximise L subject to each
+  # column of q lying on the simplex (q_ki >= 0, sum_k q_ki = 1) and each p_kj
+  # lying in [0, 1].
+  #
+  # Storage
+  # -------
+  # Internally q is a K x I matrix and p a K x J matrix (one column per
+  # individual and per locus), which is the layout used by the C++ kernels:
+  # the K values of a column, which are updated together, are contiguous in
+  # memory. They are transposed back to the usual I x K and J x K layouts
+  # only when the results are returned.
+  #
+  # All the work on the genotypes happens in C++ (src/kernels.cpp), through
+  # the accessor `geno_ptr`; this function only orchestrates the iterations,
+  # whose bookkeeping is cheap (vectors of length K * (I + J)) compared with
+  # the passes over the I x J genotypes.
   n_indiv <- data$n_indiv
   n_loci <- data$n_loci
   geno_ptr <- data$geno_ptr
+  # the log is accumulated in an environment, so that the helper below can
+  # append to it, and it is returned with the results (as with the log of
+  # ADMIXTURE in tidypopgen::gt_admixture())
   log_env <- new.env()
   log_env$lines <- character(0)
   log_msg <- function(...) {
@@ -49,11 +78,18 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
 
   # random start, as in the AdmixData constructor: uniform values, with each
   # column of q rescaled to sum to one
+  # (the random values are drawn from R's generator, so results are
+  # reproducible with set.seed(), which gt_openadmixture() handles)
   q <- matrix(stats::runif(k * n_indiv), nrow = k)
   q <- sweep(q, 2, colSums(q), "/")
   p <- matrix(stats::runif(k * n_loci), nrow = k)
 
   # EM priming, unless both blocks are given
+  # A few iterations of the EM algorithm of FRAPPE (Tang et al. 2005) move the
+  # random start into a sensible region of the parameter space. EM steps are
+  # cheap and always increase the likelihood, but converge slowly, so they are
+  # only used to get started. Each step updates q and p simultaneously from
+  # the current values (see oadm_em() in src/kernels.cpp for the formulas).
   if (is.null(init_q) || is.null(init_p)) {
     for (i in seq_len(n_em_iter)) {
       em <- oadm_em_cpp(geno_ptr, q, p, n_cores)
@@ -65,8 +101,12 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
       )
     }
   }
+  # starting values given by the user replace the corresponding block (as in
+  # OpenADMIXTURE.jl, EM is still run if only one of the two is given, so that
+  # the other block starts from a sensible value)
   if (!is.null(init_q)) q <- t(init_q)
   if (!is.null(init_p)) p <- t(init_p)
+  # the C++ kernels expect double matrices
   storage.mode(q) <- "double"
   storage.mode(p) <- "double"
 
@@ -75,6 +115,9 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
   ll_history <- ll_new
 
   # secant pairs for the quasi-Newton step, stored as columns
+  # All parameters are stacked into a single vector x = c(q, p) of length
+  # K * (I + J); u_mat and v_mat keep the last n_qn secant pairs, used as a
+  # circular buffer (column `col` is overwritten at each iteration).
   n_par <- k * (n_indiv + n_loci)
   u_mat <- matrix(0, n_par, n_qn)
   v_mat <- matrix(0, n_par, n_qn)
@@ -82,24 +125,52 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
   iter <- 0
   for (iter in seq_len(max_iter)) {
     ll_prev <- ll_new
+
+    # Block updates
+    # -------------
+    # One "sweep" F updates all of q given p, then all of p given the new q.
+    # Given p, the log-likelihood separates into one term per individual, so
+    # each column of q can be updated independently; likewise, given q, each
+    # column of p can be updated independently. Each column update is a
+    # Newton step: the log-likelihood is approximated by a quadratic around
+    # the current value, and its maximum under the constraints (simplex for
+    # q, box for p) is found exactly by a small quadratic program
+    # (src/qp_sweep.cpp). A fixed block (fix_q or fix_p) is simply copied.
+    # We apply the sweep twice: x1 = F(x0) and x2 = F(x1).
     q1 <- if (fix_q) q else oadm_update_q_cpp(geno_ptr, q, p, n_cores)
     p1 <- if (fix_p) p else oadm_update_p_cpp(geno_ptr, q1, p, n_cores)
     q2 <- if (fix_q) q1 else oadm_update_q_cpp(geno_ptr, q1, p1, n_cores)
     p2 <- if (fix_p) p1 else oadm_update_p_cpp(geno_ptr, q2, p1, n_cores)
+    # the log-likelihood after two plain sweeps, our fallback for this
+    # iteration
     ll_basic <- oadm_loglik_cpp(geno_ptr, q2, p2, n_cores)
 
+    # Quasi-Newton acceleration
+    # -------------------------
+    # The maximum likelihood estimate is a fixed point of the sweep, x = F(x).
+    # Repeatedly applying F gets there slowly, so we instead try to jump
+    # directly to the fixed point. Each iteration gives a secant pair
+    # u = x1 - x0 and v = x2 - x1 = F(x1) - F(x0), which tells us how F
+    # changes along the direction u (v ~ dF u). The last n_qn pairs define a
+    # low-rank approximation of the Jacobian dF, from which we solve for the
+    # fixed point (Zhou, Alexander and Lange 2011, see oadm_qn_step() below).
     x0 <- c(q, p)
     x1 <- c(q1, p1)
     x2 <- c(q2, p2)
     col <- (iter - 1) %% n_qn + 1
     u_mat[, col] <- x1 - x0
     v_mat[, col] <- x2 - x1
+    # during the first iterations, only the pairs computed so far are used
     used <- seq_len(min(iter, n_qn))
     x_qn <- oadm_qn_step(
       x0, x1, u_mat[, used, drop = FALSE],
       v_mat[, used, drop = FALSE]
     )
 
+    # The quasi-Newton step ignores the constraints, so we project it back
+    # onto the feasible set (each column of q onto the simplex, with a lower
+    # bound of 1e-5, and each p into [1e-5, 1 - 1e-5]) before evaluating it.
+    # The first k * n_indiv values of x are q, the rest are p.
     ll_qn <- -Inf
     if (!is.null(x_qn)) {
       q_qn <- oadm_project_q_cpp(
@@ -110,6 +181,12 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
       )
       ll_qn <- oadm_loglik_cpp(geno_ptr, q_qn, p_qn, n_cores)
     }
+    # The quasi-Newton step is a gamble: we keep it only if it improves on
+    # the log-likelihood at the start of the iteration; otherwise we fall back
+    # on the two plain sweeps. (As in OpenADMIXTURE.jl, the comparison is with
+    # ll_prev rather than ll_basic, so an accepted step may be slightly worse
+    # than x2, but it still makes progress and tends to pay off over the
+    # following iterations.)
     if (is.finite(ll_qn) && ll_prev < ll_qn) {
       q <- q_qn
       p <- p_qn
@@ -120,6 +197,11 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
       ll_new <- ll_basic
     }
     ll_history <- c(ll_history, ll_new)
+
+    # Convergence
+    # -----------
+    # We stop when the relative change in log-likelihood over an iteration
+    # falls below rtol (1e-7 by default, as in OpenADMIXTURE.jl).
     reldiff <- abs((ll_new - ll_prev) / ll_prev)
     log_msg(
       "Iteration ", iter, ": loglikelihood = ", format(ll_new, digits = 12),
@@ -139,6 +221,7 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
   }
   log_msg("Loglikelihood: ", format(ll_new, digits = 12))
 
+  # return q and p in the usual layout (individuals x K and loci x K)
   list(
     q = t(q),
     p = t(p),
@@ -161,8 +244,21 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
 #' @keywords internal
 #' @noRd
 oadm_qn_step <- function(x0, x1, u_mat, v_mat) {
+  # We look for the fixed point of the sweep F. Near the current estimate,
+  # F(x) ~ F(x0) + M (x - x0), where M approximates the Jacobian of F. The
+  # secant pairs require M U = V (each column of V is the change in F caused
+  # by the change in x in the corresponding column of U), and the smallest
+  # such matrix is M = V (U'U)^-1 U'. Solving x = F(x0) + M (x - x0) with
+  # this M (using the Woodbury identity to avoid ever forming the large
+  # matrix M) gives
+  #   x = x1 - V (U'(U - V))^-1 U'(x0 - x1),
+  # where x1 = F(x0). Only an n_qn x n_qn system (3 x 3 by default) needs to
+  # be solved, so the step is cheap even with millions of parameters.
   lhs <- crossprod(u_mat, u_mat - v_mat)
   rhs <- crossprod(u_mat, x0 - x1)
+  # the small system can be singular (e.g. when two secant pairs are nearly
+  # collinear close to convergence); in that case we skip the quasi-Newton
+  # step for this iteration
   coef <- tryCatch(solve(lhs, rhs), error = function(e) NULL)
   if (is.null(coef) || any(!is.finite(coef))) {
     return(NULL)

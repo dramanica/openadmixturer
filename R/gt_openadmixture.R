@@ -80,6 +80,12 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
                              init_q = NULL, init_p = NULL, fix_q = FALSE,
                              fix_p = FALSE, use_imputed = FALSE, n_cores = 1,
                              verbose = FALSE) {
+  # This function is a thin wrapper: it checks the arguments, prepares the
+  # data once, and then calls oadm_fit() (R/oadm_fit.R) for each run,
+  # collecting the results into a gt_admix object with the same structure as
+  # the one returned by tidypopgen::gt_admixture().
+
+  # Check the arguments
   k <- as.integer(k)
   n_runs <- as.integer(n_runs)
   if (length(k) == 0 || any(is.na(k)) || any(k < 1)) {
@@ -96,6 +102,8 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
       call. = FALSE
     )
   }
+  # as in gt_admixture(), seeds can be given per run (and reused for each k)
+  # or per combination of k and run
   if (!is.null(seed) && length(seed) == n_runs) {
     seed <- rep(seed, length(k))
   }
@@ -104,6 +112,9 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
       call. = FALSE
     )
   }
+  # fixing both blocks would leave nothing to estimate (and make the
+  # quasi-Newton system singular); fixing a block without starting values
+  # would fix it at a random value
   if (fix_q && fix_p) {
     stop("'fix_q' and 'fix_p' cannot both be TRUE", call. = FALSE)
   }
@@ -114,6 +125,9 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
     stop("'fix_p = TRUE' requires 'init_p'", call. = FALSE)
   }
 
+  # Prepare the data: indices into the backing file, decoding table and
+  # ploidy of each individual (R/oadm_data.R). This is done once and shared
+  # by all runs.
   data <- oadm_prepare(x, use_imputed = use_imputed)
   if (any(k >= data$n_indiv)) {
     stop("'k' should be smaller than the number of individuals",
@@ -122,9 +136,13 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
   }
   init_q <- oadm_check_init(init_q, data$n_indiv, k[1], "init_q", TRUE)
   init_p <- oadm_check_init(init_p, data$n_loci, k[1], "init_p", FALSE)
+  # build the C++ accessor to the genotypes, reused by every kernel call
   data <- oadm_attach(data)
 
   # use our own seeds without disturbing the global RNG state
+  # (the random starting values are drawn with R's generator, so set.seed()
+  # makes each run reproducible; on exit we restore the user's RNG state, or
+  # remove .Random.seed if there was none before)
   if (!is.null(seed)) {
     if (exists(".Random.seed", envir = globalenv())) {
       old_seed <- get(".Random.seed", envir = globalenv())
@@ -134,6 +152,9 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
     }
   }
 
+  # Run the fits, one per combination of k and run, filling in the elements
+  # of the gt_admix object in the same order as gt_admixture() (by k, then by
+  # run)
   loci_names <- tidypopgen::show_loci(x)$name
   adm_list <- list(
     k = integer(0), Q = list(), P = list(), log = list(),
@@ -153,9 +174,13 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
         n_em_iter = n_em_iter, n_qn = n_qn, n_cores = n_cores,
         verbose = verbose
       )
+      # P has one row per locus, in the order of show_loci(x), and gives the
+      # frequency of the alternate allele in each ancestral population
       p_mat <- fit$p
       dimnames(p_mat) <- list(loci_names, paste0(".P", seq_len(this_k)))
       adm_list$k[index] <- this_k
+      # q_matrix() gives Q the class and column names (.Q1, .Q2, ...) that
+      # tidypopgen's methods (autoplot(), tidy(), augment()) expect
       adm_list$Q[[index]] <- tidypopgen::q_matrix(fit$q)
       adm_list$P[[index]] <- p_mat
       adm_list$log[[index]] <- fit$log
@@ -165,6 +190,8 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
     }
   }
 
+  # metadata used by tidypopgen's methods to label and group individuals in
+  # plots and tables
   adm_list$id <- x$id
   if (inherits(x, "grouped_gen_tbl")) {
     adm_list$group <- x[[dplyr::group_vars(x)]]
@@ -204,6 +231,9 @@ oadm_check_init <- function(init, n_rows, k, arg, simplex) {
     stop("the rows of '", arg, "' should sum to 1", call. = FALSE)
   }
   # keep starting values strictly inside the feasible set
+  # (the same bounds used for the estimates: entries of Q of at least 1e-5,
+  # with rows summing to one, and P in [1e-5, 1 - 1e-5]); this avoids
+  # log(0) in the log-likelihood and keeps the Newton steps well defined
   eps <- 1e-5
   if (simplex) {
     init <- t(oadm_project_q_cpp(t(init)))

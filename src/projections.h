@@ -7,7 +7,19 @@
 //   {sum(q) == 1, q >= eps}, in place.
 // project_p: clamp p[0..K-1] to [eps, 1 - eps], in place.
 // Both are thread-safe (no shared state, no R API).
+//
+// They are applied after every Newton step (src/kernels.cpp, on par + delta
+// from the QP solver), after the quasi-Newton extrapolation in the R
+// fitting loop (via oadm_project_q_cpp / oadm_project_p_cpp) and to the
+// starting values. The QP already keeps columns inside [0, 1], but the
+// projections tidy up rounding error, any partial step left by a failed QP,
+// and quasi-Newton points that can land anywhere.
 
+// Lower bound for every entry of Q and P (and 1 - OADM_EPS the upper bound
+// for P). 1e-5 matches the output bounds of ADMIXTURE and OpenADMIXTURE.jl,
+// and keeps the log-likelihood finite: with q and p bounded away from 0 and
+// 1, the per-genotype probability sum_k q_ik p_kj and its complement are
+// strictly positive, so log() never sees 0.
 const double OADM_EPS = 1e-5;
 
 void project_q(double* q, int K, double eps = OADM_EPS);
