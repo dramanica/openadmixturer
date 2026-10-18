@@ -92,10 +92,15 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
                   Nullable<NumericMatrix> init_p, bool fix_q, bool fix_p,
                   int max_iter, double rtol, int n_em_iter, int n_qn,
                   int n_cores, bool verbose) {
+  // The genotypes (I individuals x J loci) and basic checks; the arguments
+  // have already been validated in R, so these only guard against misuse
+  // from within the package. All R errors must happen here, before any
+  // parallel region.
   const GenoView& geno = get_geno(geno_ptr);
   const size_t I = geno.nrow(), J = geno.ncol(), K = k;
   if (k < 1 || n_qn < 1 || n_cores < 1 || max_iter < 0 || n_em_iter < 0)
     stop("invalid arguments to oadm_fit_cpp()");
+  // number of values in q (K x I) and in p (K x J)
   const size_t nq = K * I, np = K * J;
   FitLog log = {verbose, {}};
 
@@ -112,6 +117,7 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
   // implementation (all of q, then all of p), so a given seed gives the same
   // start. (Rcpp sets up R's generator for exported functions.)
   for (size_t t = 0; t < nq; t++) q[t] = R::runif(0.0, 1.0);
+  // column i of q (the K proportions of individual i) starts at q[K * i]
   for (size_t i = 0; i < I; i++) {
     double sum = 0.0;
     for (size_t kk = 0; kk < K; kk++) sum += q[K * i + kk];
@@ -125,12 +131,16 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
   // current values (see oadm_em() in kernels.cpp).
   if (init_q.isNull() || init_p.isNull()) {
     for (int it = 1; it <= n_em_iter; it++) {
+      // the EM step writes into the spare buffers (q1, p1), which then
+      // become the current estimate; the old estimate's buffers are reused
+      // as spares
       oadm_em(geno, q.data(), p.data(), k, q1.data(), p1.data(), n_cores);
       std::swap(q, q1);
       std::swap(p, p1);
       const double ll = oadm_loglik(geno, q.data(), p.data(), k, n_cores);
       log.add("EM iteration " + std::to_string(it) + ": loglikelihood = " +
               fmt(ll, 12));
+      // allow the user to interrupt (outside any parallel region)
       checkUserInterrupt();
     }
   }
@@ -138,6 +148,7 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
   // OpenADMIXTURE.jl, EM is still run if only one of the two is given, so
   // that the other block starts from a sensible value). They come in the
   // user layout (individuals x K, loci x K) and are transposed here.
+  // (element (i, k) of the user's matrix goes to row k of column i of q)
   if (init_q.isNotNull()) {
     NumericMatrix iq(init_q.get());
     for (size_t i = 0; i < I; i++)
@@ -149,6 +160,8 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
       for (size_t kk = 0; kk < K; kk++) p[K * j + kk] = ip(j, kk);
   }
 
+  // log-likelihood of the starting estimate; ll_history records it and then
+  // the log-likelihood at the end of every iteration
   double ll_new = oadm_loglik(geno, q.data(), p.data(), k, n_cores);
   log.add("Initial loglikelihood: " + fmt(ll_new, 12));
   std::vector<double> ll_history(1, ll_new);
@@ -158,6 +171,7 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
   bool converged = false;
   int iter = 0;
   for (iter = 1; iter <= max_iter; iter++) {
+    // log-likelihood at the start of the iteration (that of x0 = (q, p))
     const double ll_prev = ll_new;
 
     // Block updates: one sweep F updates all of q given p, then all of p
@@ -167,6 +181,10 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     // quadratic program under the constraints (simplex for q, box for p;
     // see qp_sweep.cpp). A fixed block is simply copied. We apply the sweep
     // twice: x1 = F(x0) and x2 = F(x1).
+    // Each update writes into its own buffer and leaves its inputs intact,
+    // so x0 = (q, p), x1 = (q1, p1) and x2 = (q2, p2) are all available for
+    // the quasi-Newton step below. (Copying a fixed block, e.g. q1 = q,
+    // copies the values into the existing buffer: no allocation.)
     if (fix_q) q1 = q;
     else oadm_update_q(geno, q.data(), p.data(), k, q1.data(), n_cores);
     if (fix_p) p1 = p;
@@ -189,10 +207,14 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     // first iterations. The step ignores the constraints, so qn_step()
     // projects it back onto the feasible set; it fails (and the step is
     // skipped) if the small linear system is singular.
+    // store this iteration's secant pair, overwriting the oldest one
     const size_t col = (iter - 1) % n_qn;
     qn_push(qn, col, q.data(), p.data(), q1.data(), p1.data(), q2.data(),
             p2.data(), nq, np);
+    // in the first n_qn - 1 iterations, fewer pairs are available
     const size_t n_used = std::min((size_t) iter, (size_t) n_qn);
+    // the quasi-Newton point goes into (qq, pq); if the step fails, its
+    // log-likelihood stays at -Inf, so the plain sweeps are used
     double ll_qn = R_NegInf;
     if (qn_step(qn, n_used, q.data(), p.data(), q1.data(), p1.data(), k, I,
                 J, qq.data(), pq.data(), n_cores))
@@ -204,6 +226,9 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     // is with ll_prev rather than ll_basic, so an accepted step may be
     // slightly worse than x2, but it still makes progress and tends to pay
     // off over the following iterations.)
+    // Accepting an estimate swaps its buffers into (q, p); the buffers of
+    // the previous estimate become spare and are overwritten in the next
+    // iteration.
     if (std::isfinite(ll_qn) && ll_prev < ll_qn) {
       std::swap(q, qq);
       std::swap(p, pq);
@@ -230,6 +255,8 @@ List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q,
     // parallel region; the buffers are freed automatically)
     checkUserInterrupt();
   }
+  // if the loop ran to the end without converging, the for loop has left
+  // iter at max_iter + 1; report the number of iterations actually run
   if (iter > max_iter) iter = max_iter;
   if (converged) {
     log.add("Converged in " + std::to_string(iter) + " iterations.");

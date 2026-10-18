@@ -397,8 +397,12 @@ static const size_t MIN_SEG_LOCI = 256;
 // only on the dimensions of the data, so that results do not depend on the
 // number of threads.
 static size_t q_segments(size_t I, size_t J) {
+  // number of blocks of individuals; with enough of them, the single-pass
+  // path already has enough independent tasks
   const size_t nbi = n_blocks(I, TILE_I);
   if (nbi >= MIN_Q_TASKS) return 1;
+  // otherwise, enough segments to have about MIN_Q_TASKS tasks in total
+  // (rounded up: e.g. 6 blocks need 6 segments, giving 36 tasks)
   size_t n_seg = (MIN_Q_TASKS + nbi - 1) / nbi;
   // do not make segments shorter than MIN_SEG_LOCI loci
   n_seg = std::min(n_seg, std::max((size_t) 1, J / MIN_SEG_LOCI));
@@ -414,9 +418,13 @@ static void accum_q_segmented(const GenoView& geno, const double* qT,
                               size_t n_seg, double* grad, double* hess,
                               int n_cores) {
   const size_t I = geno.nrow(), J = geno.ncol(), KK = (size_t) K * K;
+  // tasks are the (segment, block of individuals) pairs, numbered
+  // t = seg * nbi + bl
   const size_t nbi = n_blocks(I, TILE_I);
   const ptrdiff_t n_tasks = (ptrdiff_t) (nbi * n_seg);
-  // partial sums of each segment: K x I (and K x K x I) per segment
+  // partial sums of each segment: K x I (and K x K x I) per segment, stored
+  // one segment after the other (segment seg starts at seg * K * I), so the
+  // partial sums of individual i in segment seg are at K * (seg * I + i)
   std::vector<double> grad_part(n_seg * K * I);
   std::vector<double> hess_part(HESS ? n_seg * KK * I : 0);
 #pragma omp parallel num_threads(n_cores)
@@ -427,10 +435,14 @@ static void accum_q_segmented(const GenoView& geno, const double* qT,
   // (segment, block) part of the partial sums
 #pragma omp for schedule(dynamic)
   for (ptrdiff_t t = 0; t < n_tasks; t++) {
+    // which segment of loci and which block of individuals this task is
     const size_t seg = t / nbi, bl = t % nbi;
     const size_t i0 = bl * TILE_I, i1 = std::min(I, i0 + TILE_I);
     // segment boundaries: n_seg contiguous, nearly equal ranges of loci
     const size_t j0 = J * seg / n_seg, j1 = J * (seg + 1) / n_seg;
+    // the same accumulation as the single-pass path, restricted to loci
+    // [j0, j1), writing the partial sums of individuals [i0, i1) for this
+    // segment
     accum_q_block<HESS>(geno, qT, p, omp, K, i0, i1, j0, j1,
                         &grad_part[K * (seg * I + i0)],
                         HESS ? &hess_part[KK * (seg * I + i0)] : NULL, s,
@@ -932,12 +944,16 @@ void oadm_update_q(const GenoView& geno, const double* q, const double* p,
                             grad.data(), hess.data(), n_cores);
 #pragma omp parallel num_threads(n_cores)
 {
+    // per-thread scratch: the step and the QP workspace
     std::vector<double> delta(K);
     QPWork work(K);
+    // one small QP per individual; dynamic scheduling in chunks of 16
+    // individuals balances QPs that need different numbers of iterations
 #pragma omp for schedule(dynamic, 16)
     for (ptrdiff_t i = 0; i < (ptrdiff_t) I; i++) {
       const double* qi = q + K * i;
-      // the same steps as in the single-pass path below
+      // the same steps as in the single-pass path below: constrained Newton
+      // step, discard it if not finite, add it and project onto the simplex
       qp_solve_column(&hess[KK * i], &grad[K * i], qi, K, true, delta.data(),
                       work);
       discard_nonfinite_step(delta.data(), K);

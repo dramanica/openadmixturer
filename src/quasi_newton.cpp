@@ -50,12 +50,20 @@ using namespace Rcpp;
 // depend on the number of threads)
 static const size_t QN_CHUNK = 65536;
 
+// Store the secant pair of one iteration (see quasi_newton.h). Column col of
+// U receives u = x1 - x0 (how far the first sweep moved the parameters) and
+// column col of V receives v = x2 - x1 (how far the second sweep moved
+// them). The fitting loop cycles col through 0, ..., n_qn - 1, so the oldest
+// pair is overwritten and U and V always hold the last n_qn pairs.
 void qn_push(QNState& st, size_t col, const double* q, const double* p,
              const double* q1, const double* p1, const double* q2,
              const double* p2, size_t nq, size_t np) {
+  // start of column col of U and V (columns are n_par values long)
   double* u = &st.U[col * st.n_par];
   double* v = &st.V[col * st.n_par];
-  // the q block, then the p block
+  // x = (q, p) is never stacked in memory: the first nq positions of a
+  // column hold the q block and the next np positions the p block, so we
+  // fill them from the two blocks in turn
   for (size_t t = 0; t < nq; t++) {
     u[t] = q1[t] - q[t];
     v[t] = q2[t] - q1[t];
@@ -66,10 +74,20 @@ void qn_push(QNState& st, size_t col, const double* q, const double* p,
   }
 }
 
+// Compute the quasi-Newton point x_qn = x1 - V (U'(U - V))^-1 U'(x0 - x1)
+// from the first n_used secant pairs, and project it onto the feasible set
+// (see quasi_newton.h). The work has three stages:
+//   1. one pass over the parameters to form the small m x m system
+//      (m = n_used, usually 3);
+//   2. solving that system for the m coefficients;
+//   3. one pass over the parameters to form x_qn and project it.
+// Stages 1 and 3 touch every parameter and run in parallel; stage 2 is tiny.
 bool qn_step(const QNState& st, size_t n_used, const double* q,
              const double* p, const double* q1, const double* p1, int K,
              size_t n_indiv, size_t n_loci, double* q_out, double* p_out,
              int n_cores) {
+  // nq: size of the q block (positions 0 to nq - 1 of x); the p block
+  // follows. m: number of secant pairs used.
   const size_t nq = (size_t) K * n_indiv, n_par = st.n_par, m = n_used;
   const double *U = st.U.data(), *V = st.V.data();
 
@@ -78,6 +96,10 @@ bool qn_step(const QNState& st, size_t n_used, const double* q,
   // and for each column a, sum_t U[t, a] (x0[t] - x1[t]). These are computed
   // in one pass over the parameters, chunk by chunk, with the partial sums
   // of each chunk stored separately and added up in chunk order afterwards.
+  // Each chunk needs m * m sums for lhs and m sums for rhs; they are stored
+  // next to each other (lhs column-major, then rhs) in `partial`, one group
+  // of n_sums values per chunk, so that threads never write to the same
+  // place.
   const size_t n_chunks = (n_par + QN_CHUNK - 1) / QN_CHUNK;
   const size_t n_sums = m * m + m;
   std::vector<double> partial(n_chunks * n_sums, 0.0);
@@ -88,14 +110,19 @@ bool qn_step(const QNState& st, size_t n_used, const double* q,
     for (size_t t = t0; t < t1; t++) {
       // x0 - x1 at position t, read from the q or the p block
       const double d = t < nq ? q[t] - q1[t] : p[t - nq] - p1[t - nq];
+      // U[a * n_par + t] is element t of column a of U (column-major)
       for (size_t a = 0; a < m; a++) {
         const double ua = U[a * n_par + t];
+        // lhs(a, b) += U[t, a] (U[t, b] - V[t, b])
         for (size_t b = 0; b < m; b++)
           sums[a + m * b] += ua * (U[b * n_par + t] - V[b * n_par + t]);
+        // rhs(a) += U[t, a] (x0[t] - x1[t])
         sums[m * m + a] += ua * d;
       }
     }
   }
+  // add up the chunks, always in chunk order (deterministic for any number
+  // of threads), into the small system held as Armadillo objects
   arma::mat lhs(m, m, arma::fill::zeros);
   arma::vec rhs(m, arma::fill::zeros);
   for (size_t c = 0; c < n_chunks; c++) {
@@ -110,6 +137,12 @@ bool qn_step(const QNState& st, size_t n_used, const double* q,
   // this code used), a system that is singular to machine precision is
   // rejected: this happens when secant pairs are (nearly) collinear, e.g.
   // close to convergence, and the step is then skipped.
+  // rcond() estimates the reciprocal condition number of lhs: values close
+  // to 0 mean that the system is nearly singular, and solving it would
+  // amplify rounding errors into a meaningless step. R's solve() uses the
+  // same test, with the same threshold (machine epsilon). The negated
+  // comparison also rejects NaN. no_approx stops Armadillo from falling back
+  // on an approximate (least-squares) solution.
   if (!lhs.is_finite() || !rhs.is_finite()) return false;
   const double rc = arma::rcond(lhs);
   if (!(rc >= DBL_EPSILON)) return false;
@@ -119,17 +152,25 @@ bool qn_step(const QNState& st, size_t n_used, const double* q,
 
   // x_qn = x1 - V coef, written straight into the output buffers, then
   // projected column by column (columns of K values)
+  // (the coefficients are copied into a plain vector so that the parallel
+  // loop below only reads raw memory)
   std::vector<double> cf(coef.begin(), coef.end());
 #pragma omp parallel for num_threads(n_cores) schedule(static)
   for (ptrdiff_t c = 0; c < (ptrdiff_t) n_chunks; c++) {
     const size_t t0 = c * QN_CHUNK, t1 = std::min(n_par, t0 + QN_CHUNK);
     for (size_t t = t0; t < t1; t++) {
+      // element t of V coef
       double step = 0.0;
       for (size_t a = 0; a < m; a++) step += V[a * n_par + t] * cf[a];
+      // position t of x belongs to the q block or to the p block
       if (t < nq) q_out[t] = q1[t] - step;
       else p_out[t - nq] = p1[t - nq] - step;
     }
   }
+  // The extrapolated point ignores the constraints: bring each individual's
+  // ancestry proportions back onto the simplex, and each allele frequency
+  // into [1e-5, 1 - 1e-5] (projections.cpp). Columns are independent, so
+  // these loops are parallel too.
 #pragma omp parallel for num_threads(n_cores) schedule(static)
   for (ptrdiff_t i = 0; i < (ptrdiff_t) n_indiv; i++)
     project_q(q_out + (size_t) i * K, K);
