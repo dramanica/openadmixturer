@@ -17,7 +17,7 @@ objects, so all of `tidypopgen`'s methods (`autoplot()`, `get_q_matrix()`,
 
 ```r
 # install.packages("remotes")
-remotes::install_github("EvolEcolGroup/openadmixturer")
+remotes::install_github("dramanica/openadmixturer")
 ```
 
 ## Usage
