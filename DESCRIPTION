@@ -19,9 +19,8 @@ Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 3.5)
 Imports:
-    bigstatsr,
-    cli,
-    rlang,
+    dplyr,
+    stats,
     Rcpp,
     tidypopgen,
     vctrs
