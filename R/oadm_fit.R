@@ -76,6 +76,21 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
     if (verbose) message(line)
   }
 
+  # Memory: each kernel call returns new matrices, and the previous estimates
+  # become garbage. R only frees garbage when its garbage collector runs,
+  # which it does when its heap reaches a threshold that grows with the
+  # amount of memory in use; with many loci, a dozen or more discarded copies
+  # of P could accumulate before that happened, more than doubling the peak
+  # memory of a fit. So, when the parameters are large (a copy of q and p
+  # takes more than about 16 MB), we ask for a minor collection after every
+  # iteration: recently allocated objects are in the youngest generation, so
+  # this is cheap (tens of milliseconds, against seconds for the passes over
+  # the genotypes) and frees the discarded estimates straight away.
+  collect_garbage <- k * (n_indiv + n_loci) > 2e6
+  free_memory <- function() {
+    if (collect_garbage) invisible(gc(verbose = FALSE, full = FALSE))
+  }
+
   # random start, as in the AdmixData constructor: uniform values, with each
   # column of q rescaled to sum to one
   # (the random values are drawn from R's generator, so results are
@@ -95,6 +110,8 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
       em <- oadm_em_cpp(geno_ptr, q, p, n_cores)
       q <- em$q
       p <- em$p
+      rm(em)
+      free_memory()
       log_msg(
         "EM iteration ", i, ": loglikelihood = ",
         format(oadm_loglik_cpp(geno_ptr, q, p, n_cores), digits = 12)
@@ -114,13 +131,16 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
   log_msg("Initial loglikelihood: ", format(ll_new, digits = 12))
   ll_history <- ll_new
 
-  # secant pairs for the quasi-Newton step, stored as columns
-  # All parameters are stacked into a single vector x = c(q, p) of length
-  # K * (I + J); u_mat and v_mat keep the last n_qn secant pairs, used as a
-  # circular buffer (column `col` is overwritten at each iteration).
-  n_par <- k * (n_indiv + n_loci)
-  u_mat <- matrix(0, n_par, n_qn)
-  v_mat <- matrix(0, n_par, n_qn)
+  # secant pairs for the quasi-Newton step
+  # Conceptually, all parameters are stacked into a single vector x = (q, p)
+  # of length K * (I + J), and the last n_qn secant pairs are kept as the
+  # columns of two matrices U and V, used as a circular buffer (column `col`
+  # is overwritten at each iteration). They live in C++
+  # (src/quasi_newton.cpp), which works directly on the q and p blocks
+  # without stacking them: in R, every vector operation would allocate a
+  # new copy of the parameters, and with many loci these copies dominated the
+  # memory used by a fit.
+  qn_state <- oadm_qn_new_cpp(k * (n_indiv + n_loci), n_qn)
   converged <- FALSE
   iter <- 0
   for (iter in seq_len(max_iter)) {
@@ -153,33 +173,21 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
     # u = x1 - x0 and v = x2 - x1 = F(x1) - F(x0), which tells us how F
     # changes along the direction u (v ~ dF u). The last n_qn pairs define a
     # low-rank approximation of the Jacobian dF, from which we solve for the
-    # fixed point (Zhou, Alexander and Lange 2011, see oadm_qn_step() below).
-    x0 <- c(q, p)
-    x1 <- c(q1, p1)
-    x2 <- c(q2, p2)
+    # fixed point (Zhou, Alexander and Lange 2011, see src/quasi_newton.cpp).
+    # Here x0 = (q, p), x1 = (q1, p1) and x2 = (q2, p2).
     col <- (iter - 1) %% n_qn + 1
-    u_mat[, col] <- x1 - x0
-    v_mat[, col] <- x2 - x1
+    oadm_qn_push_cpp(qn_state, col, q, p, q1, p1, q2, p2)
     # during the first iterations, only the pairs computed so far are used
-    used <- seq_len(min(iter, n_qn))
-    x_qn <- oadm_qn_step(
-      x0, x1, u_mat[, used, drop = FALSE],
-      v_mat[, used, drop = FALSE]
-    )
-
-    # The quasi-Newton step ignores the constraints, so we project it back
+    n_used <- min(iter, n_qn)
+    # The quasi-Newton step ignores the constraints, so it is projected back
     # onto the feasible set (each column of q onto the simplex, with a lower
-    # bound of 1e-5, and each p into [1e-5, 1 - 1e-5]) before evaluating it.
-    # The first k * n_indiv values of x are q, the rest are p.
+    # bound of 1e-5, and each p into [1e-5, 1 - 1e-5]) before evaluating it;
+    # NULL means that the small linear system was singular, and the step is
+    # skipped for this iteration
+    x_qn <- oadm_qn_step_cpp(qn_state, n_used, q, p, q1, p1, n_cores)
     ll_qn <- -Inf
     if (!is.null(x_qn)) {
-      q_qn <- oadm_project_q_cpp(
-        matrix(x_qn[seq_len(k * n_indiv)], nrow = k)
-      )
-      p_qn <- oadm_project_p_cpp(
-        matrix(x_qn[k * n_indiv + seq_len(k * n_loci)], nrow = k)
-      )
-      ll_qn <- oadm_loglik_cpp(geno_ptr, q_qn, p_qn, n_cores)
+      ll_qn <- oadm_loglik_cpp(geno_ptr, x_qn$q, x_qn$p, n_cores)
     }
     # The quasi-Newton step is a gamble: we keep it only if it improves on
     # the log-likelihood at the start of the iteration; otherwise we fall back
@@ -188,14 +196,18 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
     # than x2, but it still makes progress and tends to pay off over the
     # following iterations.)
     if (is.finite(ll_qn) && ll_prev < ll_qn) {
-      q <- q_qn
-      p <- p_qn
+      q <- x_qn$q
+      p <- x_qn$p
       ll_new <- ll_qn
     } else {
       q <- q2
       p <- p2
       ll_new <- ll_basic
     }
+    # drop the intermediate estimates now, so that their memory can be
+    # reused by the next iteration (with many loci, each is a copy of P)
+    rm(q1, p1, q2, p2, x_qn)
+    free_memory()
     ll_history <- c(ll_history, ll_new)
 
     # Convergence
@@ -231,39 +243,6 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
     converged = converged,
     log = log_env$lines
   )
-}
-
-#' Quasi-Newton step of Zhou, Alexander and Lange (2011)
-#'
-#' Computes `x1 - V (U'(U - V))^-1 U'(x0 - x1)`, as `update_QN!()` in
-#' OpenADMIXTURE.jl.
-#' @param x0,x1 the current estimate and the estimate after one update
-#' @param u_mat,v_mat matrices whose columns are the secant pairs
-#' @returns the new (unprojected) estimate, or `NULL` if the linear system is
-#'   singular
-#' @keywords internal
-#' @noRd
-oadm_qn_step <- function(x0, x1, u_mat, v_mat) {
-  # We look for the fixed point of the sweep F. Near the current estimate,
-  # F(x) ~ F(x0) + M (x - x0), where M approximates the Jacobian of F. The
-  # secant pairs require M U = V (each column of V is the change in F caused
-  # by the change in x in the corresponding column of U), and the smallest
-  # such matrix is M = V (U'U)^-1 U'. Solving x = F(x0) + M (x - x0) with
-  # this M (using the Woodbury identity to avoid ever forming the large
-  # matrix M) gives
-  #   x = x1 - V (U'(U - V))^-1 U'(x0 - x1),
-  # where x1 = F(x0). Only an n_qn x n_qn system (3 x 3 by default) needs to
-  # be solved, so the step is cheap even with millions of parameters.
-  lhs <- crossprod(u_mat, u_mat - v_mat)
-  rhs <- crossprod(u_mat, x0 - x1)
-  # the small system can be singular (e.g. when two secant pairs are nearly
-  # collinear close to convergence); in that case we skip the quasi-Newton
-  # step for this iteration
-  coef <- tryCatch(solve(lhs, rhs), error = function(e) NULL)
-  if (is.null(coef) || any(!is.finite(coef))) {
-    return(NULL)
-  }
-  drop(x1 - v_mat %*% coef)
 }
 
 #' Create the C++ genotype accessor for a prepared dataset

@@ -53,3 +53,15 @@ oadm_project_p_cpp <- function(p) {
     .Call(`_openadmixturer_oadm_project_p_cpp`, p)
 }
 
+oadm_qn_new_cpp <- function(n_par, n_qn) {
+    .Call(`_openadmixturer_oadm_qn_new_cpp`, n_par, n_qn)
+}
+
+oadm_qn_push_cpp <- function(state, col, q, p, q1, p1, q2, p2) {
+    invisible(.Call(`_openadmixturer_oadm_qn_push_cpp`, state, col, q, p, q1, p1, q2, p2))
+}
+
+oadm_qn_step_cpp <- function(state, n_used, q, p, q1, p1, n_cores) {
+    .Call(`_openadmixturer_oadm_qn_step_cpp`, state, n_used, q, p, q1, p1, n_cores)
+}
+

@@ -1,15 +1,10 @@
-// Rcpp wrappers around the QP solver and the projections. The QP wrapper is
-// used only in tests; oadm_project_q_cpp and oadm_project_p_cpp are also
-// used by the R fitting loop for the quasi-Newton step.
-//
-// In more detail: the Newton updates themselves call qp_solve_column,
-// project_q and project_p directly from C++ (src/kernels.cpp), so none of
-// these wrappers sits on the hot path. R/oadm_fit.R uses the two projection
-// wrappers to bring the quasi-Newton extrapolated point back into the
-// feasible set before its log-likelihood is evaluated, and
-// R/gt_openadmixture.R uses oadm_project_q_cpp on user-supplied starting
-// values. oadm_qp_solve_cpp exists so that the solver can be checked
-// against small hand-made problems from testthat.
+// Rcpp wrappers around the QP solver and the projections. They are not on
+// the hot path: the Newton updates call qp_solve_column, project_q and
+// project_p directly from C++ (src/kernels.cpp), and so does the
+// quasi-Newton step (src/quasi_newton.cpp). R/gt_openadmixture.R uses
+// oadm_project_q_cpp on user-supplied starting values; the other wrappers
+// exist so that the solver and the projections can be checked from
+// testthat.
 #include <Rcpp.h>
 #include "qp_sweep.h"
 #include "projections.h"

@@ -12,9 +12,9 @@
 // to 1 / K, and project_p maps NaN to 0.5 (see projections.cpp).
 //
 // They are applied after every Newton step (src/kernels.cpp, on par + delta
-// from the QP solver), after the quasi-Newton extrapolation in the R
-// fitting loop (via oadm_project_q_cpp / oadm_project_p_cpp) and to the
-// starting values. The QP already keeps columns inside [0, 1], but the
+// from the QP solver), after the quasi-Newton extrapolation
+// (src/quasi_newton.cpp) and to the starting values (via oadm_project_q_cpp
+// in R). The QP already keeps columns inside [0, 1], but the
 // projections tidy up rounding error, any partial step left by a failed QP,
 // and quasi-Newton points that can land anywhere.
 

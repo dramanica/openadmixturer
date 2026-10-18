@@ -197,6 +197,52 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// oadm_qn_new_cpp
+SEXP oadm_qn_new_cpp(double n_par, int n_qn);
+RcppExport SEXP _openadmixturer_oadm_qn_new_cpp(SEXP n_parSEXP, SEXP n_qnSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type n_par(n_parSEXP);
+    Rcpp::traits::input_parameter< int >::type n_qn(n_qnSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_qn_new_cpp(n_par, n_qn));
+    return rcpp_result_gen;
+END_RCPP
+}
+// oadm_qn_push_cpp
+void oadm_qn_push_cpp(SEXP state, int col, const NumericMatrix& q, const NumericMatrix& p, const NumericMatrix& q1, const NumericMatrix& p1, const NumericMatrix& q2, const NumericMatrix& p2);
+RcppExport SEXP _openadmixturer_oadm_qn_push_cpp(SEXP stateSEXP, SEXP colSEXP, SEXP qSEXP, SEXP pSEXP, SEXP q1SEXP, SEXP p1SEXP, SEXP q2SEXP, SEXP p2SEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type state(stateSEXP);
+    Rcpp::traits::input_parameter< int >::type col(colSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q(qSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p(pSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q1(q1SEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q2(q2SEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p2(p2SEXP);
+    oadm_qn_push_cpp(state, col, q, p, q1, p1, q2, p2);
+    return R_NilValue;
+END_RCPP
+}
+// oadm_qn_step_cpp
+SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q, const NumericMatrix& p, const NumericMatrix& q1, const NumericMatrix& p1, int n_cores);
+RcppExport SEXP _openadmixturer_oadm_qn_step_cpp(SEXP stateSEXP, SEXP n_usedSEXP, SEXP qSEXP, SEXP pSEXP, SEXP q1SEXP, SEXP p1SEXP, SEXP n_coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type state(stateSEXP);
+    Rcpp::traits::input_parameter< int >::type n_used(n_usedSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q(qSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p(pSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q1(q1SEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< int >::type n_cores(n_coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_qn_step_cpp(state, n_used, q, p, q1, p1, n_cores));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 10},
@@ -212,6 +258,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_openadmixturer_oadm_qp_solve_cpp", (DL_FUNC) &_openadmixturer_oadm_qp_solve_cpp, 4},
     {"_openadmixturer_oadm_project_q_cpp", (DL_FUNC) &_openadmixturer_oadm_project_q_cpp, 1},
     {"_openadmixturer_oadm_project_p_cpp", (DL_FUNC) &_openadmixturer_oadm_project_p_cpp, 1},
+    {"_openadmixturer_oadm_qn_new_cpp", (DL_FUNC) &_openadmixturer_oadm_qn_new_cpp, 2},
+    {"_openadmixturer_oadm_qn_push_cpp", (DL_FUNC) &_openadmixturer_oadm_qn_push_cpp, 8},
+    {"_openadmixturer_oadm_qn_step_cpp", (DL_FUNC) &_openadmixturer_oadm_qn_step_cpp, 7},
     {NULL, NULL, 0}
 };
 
