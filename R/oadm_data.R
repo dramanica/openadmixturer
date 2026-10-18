@@ -76,3 +76,18 @@ oadm_decode <- function(data) {
     data$n_trials, data$scale
   )
 }
+
+#' Create the genotype accessor used by the C++ kernels
+#'
+#' The accessor is built once and reused by every kernel call. It keeps the
+#' FBM alive, but it does not survive saving and reloading the R session.
+#' @param data the output of `oadm_prepare()`
+#' @returns an external pointer
+#' @keywords internal
+#' @noRd
+oadm_geno <- function(data) {
+  oadm_geno_ptr(
+    data$fbm, data$rows, data$cols, data$lut,
+    data$n_trials, data$scale
+  )
+}

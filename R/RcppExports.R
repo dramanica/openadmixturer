@@ -5,3 +5,31 @@ oadm_decode_cpp <- function(BM, rowInd, colInd, lut, n_trials, scale) {
     .Call(`_openadmixturer_oadm_decode_cpp`, BM, rowInd, colInd, lut, n_trials, scale)
 }
 
+oadm_geno_ptr <- function(BM, rowInd, colInd, lut, n_trials, scale) {
+    .Call(`_openadmixturer_oadm_geno_ptr`, BM, rowInd, colInd, lut, n_trials, scale)
+}
+
+oadm_loglik_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_loglik_cpp`, geno_ptr, q, p, n_cores)
+}
+
+oadm_em_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_em_cpp`, geno_ptr, q, p, n_cores)
+}
+
+oadm_grad_q_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_grad_q_cpp`, geno_ptr, q, p, n_cores)
+}
+
+oadm_grad_p_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_grad_p_cpp`, geno_ptr, q, p, n_cores)
+}
+
+oadm_update_q_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_update_q_cpp`, geno_ptr, q, p, n_cores)
+}
+
+oadm_update_p_cpp <- function(geno_ptr, q, p, n_cores) {
+    .Call(`_openadmixturer_oadm_update_p_cpp`, geno_ptr, q, p, n_cores)
+}
+
