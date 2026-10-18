@@ -245,3 +245,36 @@ test_that("update kernels keep a column whose Newton step is not finite", {
   expect_false(anyNA(p_new))
   expect_equal(p_new[, 1], c(1e-5, 0.6))
 })
+
+# With few individuals, the Q-side kernels also split the loci into segments
+# (two-dimensional blocking, see accum_q_segmented() in src/kernels.cpp)
+test_that("kernels are correct when the loci are split into segments", {
+  # 70 individuals (2 blocks) and 2000 loci: 7 segments
+  expect_identical(oadm_q_segments_cpp(70, 2000), 7L)
+  # many individuals, or few loci, use a single pass
+  expect_identical(oadm_q_segments_cpp(5000, 2000), 1L)
+  expect_identical(oadm_q_segments_cpp(70, 300), 1L)
+  seg <- simulate_admixed(n = 70, m = 2000, k = 3, missing = 0.03, seed = 8)
+  inp <- ref_inputs(make_test_gt(seg$genotypes))
+  expect_kernels_match_reference(inp, k = 3)
+  st <- ref_start(70, 2000, 3)
+  # the Q update is the QP step of each individual, as solved from the
+  # reference gradient and Hessian, then projected
+  ref <- ref_grad_q(inp$g, inp$n, st$q, st$p)
+  q_ref <- st$q
+  for (i in seq_len(ncol(st$q))) {
+    step <- oadm_qp_solve_cpp(ref$hess[, , i], ref$grad[, i], st$q[, i], TRUE)
+    q_ref[, i] <- st$q[, i] + step$delta
+  }
+  q_ref <- oadm_project_q_cpp(q_ref)
+  expect_equal(
+    oadm_update_q_cpp(inp$geno, st$q, st$p, 1), q_ref,
+    tolerance = 1e-8
+  )
+  # results do not depend on the number of cores
+  for (kernel in list(oadm_em_cpp, oadm_grad_q_cpp, oadm_update_q_cpp)) {
+    res1 <- kernel(inp$geno, st$q, st$p, 1)
+    expect_identical(kernel(inp$geno, st$q, st$p, 3), res1)
+    expect_identical(kernel(inp$geno, st$q, st$p, 4), res1)
+  }
+})

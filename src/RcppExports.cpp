@@ -65,6 +65,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// oadm_q_segments_cpp
+int oadm_q_segments_cpp(double I, double J);
+RcppExport SEXP _openadmixturer_oadm_q_segments_cpp(SEXP ISEXP, SEXP JSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type I(ISEXP);
+    Rcpp::traits::input_parameter< double >::type J(JSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_q_segments_cpp(I, J));
+    return rcpp_result_gen;
+END_RCPP
+}
 // oadm_deviance_cpp
 NumericVector oadm_deviance_cpp(SEXP geno_ptr, NumericMatrix q, NumericMatrix p, int n_cores);
 RcppExport SEXP _openadmixturer_oadm_deviance_cpp(SEXP geno_ptrSEXP, SEXP qSEXP, SEXP pSEXP, SEXP n_coresSEXP) {
@@ -190,6 +202,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 10},
     {"_openadmixturer_oadm_geno_ptr", (DL_FUNC) &_openadmixturer_oadm_geno_ptr, 10},
     {"_openadmixturer_oadm_loglik_cpp", (DL_FUNC) &_openadmixturer_oadm_loglik_cpp, 4},
+    {"_openadmixturer_oadm_q_segments_cpp", (DL_FUNC) &_openadmixturer_oadm_q_segments_cpp, 2},
     {"_openadmixturer_oadm_deviance_cpp", (DL_FUNC) &_openadmixturer_oadm_deviance_cpp, 4},
     {"_openadmixturer_oadm_em_cpp", (DL_FUNC) &_openadmixturer_oadm_em_cpp, 4},
     {"_openadmixturer_oadm_grad_q_cpp", (DL_FUNC) &_openadmixturer_oadm_grad_q_cpp, 4},

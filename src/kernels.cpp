@@ -74,7 +74,10 @@
 // individuals, P-side work (sums over individuals for each locus) over blocks
 // of TILE_J loci. Each thread owns the output columns of its blocks, so there
 // are no races and no cross-thread reductions, and every column is summed in
-// the same order whatever the number of threads.
+// the same order whatever the number of threads. With few individuals there
+// are too few Q-side blocks to keep the threads busy, so the loci are also
+// split into segments, whose partial sums are added up in a fixed order
+// (two-dimensional blocking, see accum_q_segmented()).
 //
 // The innermost unit of work is a slice of one locus x up to TILE_I
 // individuals (individuals are contiguous in the column-major FBM). For each
@@ -276,7 +279,8 @@ static inline void slice_coef(const GenoView& geno, const double* qT,
   }
 }
 
-// Q side: for individuals [i0, i1), sum over all loci
+// Q side: for individuals [i0, i1), sum over loci [j0, j1) (all loci, unless
+// the work is split into segments of loci, see accum_q_segmented())
 //   grad_k = sum_j a p_kj + b (1 - p_kj)
 //   hess_{k,k2} = sum_j wa p_kj p_k2j + wb (1 - p_kj)(1 - p_k2j)   (if HESS)
 // grad is K x ni and hess K x K x ni (ni = i1 - i0); both are overwritten.
@@ -294,9 +298,10 @@ static inline void slice_coef(const GenoView& geno, const double* qT,
 template <bool HESS>
 static void accum_q_block(const GenoView& geno, const double* qT,
                           const double* p, const double* omp, int K,
-                          size_t i0, size_t i1, double* grad, double* hess,
-                          Slice& s, double* gT, double* hT) {
-  const size_t J = geno.ncol(), ni = i1 - i0, KK = (size_t) K * K;
+                          size_t i0, size_t i1, size_t j0, size_t j1,
+                          double* grad, double* hess, Slice& s, double* gT,
+                          double* hT) {
+  const size_t ni = i1 - i0, KK = (size_t) K * K;
   // number of distinct entries of a symmetric K x K matrix
   const size_t n_pair = (size_t) K * (K + 1) / 2;
   std::fill(gT, gT + K * TILE_I, 0.0);
@@ -305,8 +310,8 @@ static void accum_q_block(const GenoView& geno, const double* qT,
   const double* __restrict b = s.b.data();
   const double* __restrict wa = s.wa.data();
   const double* __restrict wb = s.wb.data();
-  // loci in order 0..J-1: the summation order for each individual is fixed
-  for (size_t j = 0; j < J; j++) {
+  // loci in order j0..j1-1: the summation order for each individual is fixed
+  for (size_t j = j0; j < j1; j++) {
     const double* pj = p + K * j;
     const double* oj = omp + K * j;
     // qp, genotypes and coefficients for this locus and block of individuals
@@ -351,6 +356,106 @@ static void accum_q_block(const GenoView& geno, const double* qT,
       mirror_hess(H, K);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Two-dimensional blocking of the Q side
+//
+// Q-side sums run over loci for each individual, and are naturally split into
+// blocks of TILE_I individuals, each owned by one thread. But with few
+// individuals there are few blocks: 379 individuals give 6 blocks, so 4
+// threads are poorly balanced, and 50 individuals give a single block, so the
+// Q side would run on one thread however many are available. Population
+// genetic datasets often have tens to hundreds of individuals and many loci,
+// so this matters.
+//
+// When there are fewer than MIN_Q_TASKS blocks of individuals, we therefore
+// also split the loci into segments, and process each (block of individuals,
+// segment of loci) pair as a separate task. Each task accumulates partial
+// sums into its own buffer (no races), and the partial sums of the segments
+// are then added up in segment order. The number of segments depends only
+// on I and J, never on the number of threads, so results are identical for
+// any n_cores (they differ from a single pass over the loci only by
+// rounding, as the sums are grouped differently).
+//
+// Memory: the partial sums take n_seg * I * (K + K (K + 1) / 2) doubles.
+// Segments are only used when I < MIN_Q_TASKS * TILE_I (2048 individuals),
+// and n_seg is about MIN_Q_TASKS / n_blocks, so n_seg * I is at most about
+// MIN_Q_TASKS * TILE_I: under 2 MB for K = 10. Larger datasets keep the
+// single-pass path (with block-local buffers only), unchanged.
+//
+// This is an implementation detail with no counterpart in OpenADMIXTURE.jl,
+// which splits the Q side over individuals only.
+
+// target number of Q-side tasks; enough to balance up to a few dozen threads
+static const size_t MIN_Q_TASKS = 32;
+// minimum number of loci per segment, so that each task has enough work to
+// amortise its overheads
+static const size_t MIN_SEG_LOCI = 256;
+
+// Number of segments of loci for the Q side (1 = no segmentation). Depends
+// only on the dimensions of the data, so that results do not depend on the
+// number of threads.
+static size_t q_segments(size_t I, size_t J) {
+  const size_t nbi = n_blocks(I, TILE_I);
+  if (nbi >= MIN_Q_TASKS) return 1;
+  size_t n_seg = (MIN_Q_TASKS + nbi - 1) / nbi;
+  // do not make segments shorter than MIN_SEG_LOCI loci
+  n_seg = std::min(n_seg, std::max((size_t) 1, J / MIN_SEG_LOCI));
+  return n_seg;
+}
+
+// Q-side sums for all individuals, split into (block, segment) tasks:
+// grad (K x I) and, if HESS, hess (K x K x I) are overwritten with the sums
+// over all loci (see accum_q_block() for the formulas).
+template <bool HESS>
+static void accum_q_segmented(const GenoView& geno, const double* qT,
+                              const double* p, const double* omp, int K,
+                              size_t n_seg, double* grad, double* hess,
+                              int n_cores) {
+  const size_t I = geno.nrow(), J = geno.ncol(), KK = (size_t) K * K;
+  const size_t nbi = n_blocks(I, TILE_I);
+  const ptrdiff_t n_tasks = (ptrdiff_t) (nbi * n_seg);
+  // partial sums of each segment: K x I (and K x K x I) per segment
+  std::vector<double> grad_part(n_seg * K * I);
+  std::vector<double> hess_part(HESS ? n_seg * KK * I : 0);
+#pragma omp parallel num_threads(n_cores)
+{
+  Slice s;
+  std::vector<double> gT(K * TILE_I), hT(HESS ? K * (K + 1) / 2 * TILE_I : 0);
+  // tasks in any order (dynamic scheduling): each writes only its own
+  // (segment, block) part of the partial sums
+#pragma omp for schedule(dynamic)
+  for (ptrdiff_t t = 0; t < n_tasks; t++) {
+    const size_t seg = t / nbi, bl = t % nbi;
+    const size_t i0 = bl * TILE_I, i1 = std::min(I, i0 + TILE_I);
+    // segment boundaries: n_seg contiguous, nearly equal ranges of loci
+    const size_t j0 = J * seg / n_seg, j1 = J * (seg + 1) / n_seg;
+    accum_q_block<HESS>(geno, qT, p, omp, K, i0, i1, j0, j1,
+                        &grad_part[K * (seg * I + i0)],
+                        HESS ? &hess_part[KK * (seg * I + i0)] : NULL, s,
+                        gT.data(), HESS ? hT.data() : NULL);
+  }
+  // add up the segments, always in segment order (deterministic); each
+  // thread handles whole individuals
+#pragma omp for schedule(static)
+  for (ptrdiff_t i = 0; i < (ptrdiff_t) I; i++) {
+    for (int k = 0; k < K; k++) {
+      double sum = 0.0;
+      for (size_t seg = 0; seg < n_seg; seg++)
+        sum += grad_part[K * (seg * I + i) + k];
+      grad[K * i + k] = sum;
+    }
+    if (HESS) {
+      for (size_t kk = 0; kk < KK; kk++) {
+        double sum = 0.0;
+        for (size_t seg = 0; seg < n_seg; seg++)
+          sum += hess_part[KK * (seg * I + i) + kk];
+        hess[KK * i + kk] = sum;
+      }
+    }
+  }
+}
 }
 
 // P side: for loci [j0, j1), sum over all individuals. Two modes:
@@ -657,6 +762,13 @@ void oadm_em(const GenoView& geno, const double* q, const double* p, int K,
   const ptrdiff_t nbi = n_blocks(I, TILE_I), nbj = n_blocks(J, TILE_J);
   // a single parallel region containing two worksharing loops, so the
   // threads (and their Slice buffers) are created only once
+  // Q pass with few individuals: compute the sums over loci with the
+  // two-dimensional blocking (accum_q_segmented()) before the parallel
+  // region below; the normalisation is then done inside it
+  const size_t n_seg = q_segments(I, J);
+  if (n_seg > 1)
+    accum_q_segmented<false>(geno, qT.data(), p, omp.data(), K, n_seg, q_new,
+                             NULL, n_cores);
 #pragma omp parallel num_threads(n_cores)
 {
   Slice s;
@@ -673,9 +785,11 @@ void oadm_em(const GenoView& geno, const double* q, const double* p, int K,
   for (ptrdiff_t bl = 0; bl < nbi; bl++) {
     const size_t i0 = bl * TILE_I, i1 = std::min(I, i0 + TILE_I);
     // the sums over j are written straight into q_new (columns i0..i1-1),
-    // which this thread owns; no Hessian is needed
-    accum_q_block<false>(geno, qT.data(), p, omp.data(), K, i0, i1,
-                         q_new + K * i0, NULL, s, gT.data(), NULL);
+    // which this thread owns; no Hessian is needed (with segments, they have
+    // already been computed above)
+    if (n_seg == 1)
+      accum_q_block<false>(geno, qT.data(), p, omp.data(), K, i0, i1, 0, J,
+                           q_new + K * i0, NULL, s, gT.data(), NULL);
     for (size_t i = i0; i < i1; i++) {
       // multiply by q_ki (taken out of the sum over j) and normalise
       double denom = 0.0;
@@ -727,6 +841,13 @@ void oadm_grad_q(const GenoView& geno, const double* q, const double* p,
   std::vector<double> omp = one_minus(p, K * J);
   std::vector<double> qT = transpose(q, K, I);
   const ptrdiff_t nb = n_blocks(I, TILE_I);
+  // with few individuals, split the loci into segments as well
+  const size_t n_seg = q_segments(I, J);
+  if (n_seg > 1) {
+    accum_q_segmented<true>(geno, qT.data(), p, omp.data(), K, n_seg, grad,
+                            hess, n_cores);
+    return;
+  }
 #pragma omp parallel num_threads(n_cores)
 {
   // thread-local slice buffers and transposed accumulators
@@ -735,7 +856,7 @@ void oadm_grad_q(const GenoView& geno, const double* q, const double* p,
 #pragma omp for schedule(dynamic)
   for (ptrdiff_t bl = 0; bl < nb; bl++) {
     const size_t i0 = bl * TILE_I, i1 = std::min(I, i0 + TILE_I);
-    accum_q_block<true>(geno, qT.data(), p, omp.data(), K, i0, i1,
+    accum_q_block<true>(geno, qT.data(), p, omp.data(), K, i0, i1, 0, J,
                         grad + K * i0, hess + KK * i0, s, gT.data(),
                         hT.data());
   }
@@ -801,6 +922,32 @@ void oadm_update_q(const GenoView& geno, const double* q, const double* p,
   std::vector<double> omp = one_minus(p, K * J);
   std::vector<double> qT = transpose(q, K, I);
   const ptrdiff_t nb = n_blocks(I, TILE_I);
+  // With few individuals, use the two-dimensional blocking: compute the
+  // gradient and Hessian of every individual first (they are small, as I is
+  // small), then solve the QPs in parallel over individuals
+  const size_t n_seg = q_segments(I, J);
+  if (n_seg > 1) {
+    std::vector<double> grad(K * I), hess(KK * I);
+    accum_q_segmented<true>(geno, qT.data(), p, omp.data(), K, n_seg,
+                            grad.data(), hess.data(), n_cores);
+#pragma omp parallel num_threads(n_cores)
+{
+    std::vector<double> delta(K);
+    QPWork work(K);
+#pragma omp for schedule(dynamic, 16)
+    for (ptrdiff_t i = 0; i < (ptrdiff_t) I; i++) {
+      const double* qi = q + K * i;
+      // the same steps as in the single-pass path below
+      qp_solve_column(&hess[KK * i], &grad[K * i], qi, K, true, delta.data(),
+                      work);
+      discard_nonfinite_step(delta.data(), K);
+      double* qn = q_new + K * i;
+      for (int k = 0; k < K; k++) qn[k] = qi[k] + delta[k];
+      project_q(qn, K);
+    }
+}
+    return;
+  }
 #pragma omp parallel num_threads(n_cores)
 {
   // per-thread scratch: slice buffers, transposed accumulators, the gradient
@@ -813,7 +960,7 @@ void oadm_update_q(const GenoView& geno, const double* q, const double* p,
   for (ptrdiff_t bl = 0; bl < nb; bl++) {
     const size_t i0 = bl * TILE_I, i1 = std::min(I, i0 + TILE_I);
     // gradient and negative Hessian for individuals [i0, i1)
-    accum_q_block<true>(geno, qT.data(), p, omp.data(), K, i0, i1,
+    accum_q_block<true>(geno, qT.data(), p, omp.data(), K, i0, i1, 0, J,
                         grad.data(), hess.data(), s, gT.data(), hT.data());
     for (size_t i = i0; i < i1; i++) {
       const size_t ii = i - i0;
@@ -960,6 +1107,14 @@ double oadm_loglik_cpp(SEXP geno_ptr, NumericMatrix q, NumericMatrix p,
   const GenoView& geno = get_geno(geno_ptr);
   const int K = check_dims(geno, q, p, n_cores);
   return oadm_loglik(geno, q.begin(), p.begin(), K, n_cores);
+}
+
+// Number of segments of loci used by the Q-side kernels for a dataset with
+// I individuals and J loci (1 = no segmentation; see q_segments()). Only
+// used in tests, to check that both code paths are exercised.
+// [[Rcpp::export]]
+int oadm_q_segments_cpp(double I, double J) {
+  return (int) q_segments((size_t) I, (size_t) J);
 }
 
 // Binomial deviance of the visible genotypes, for cross-validation; returns

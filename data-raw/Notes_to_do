@@ -1,7 +1,8 @@
 Open items for openadmixturer
 
 **Performance**
-- **Multi-core scaling:** on EUR_subset the full fit speeds up only about 2.1× on 4 cores, against about 3.5× for the C++ kernels alone. I haven't tracked down why.
+- **Multi-core scaling:** investigated. The main software limit was the Q side, parallelised over blocks of 64 individuals only, so small samples ran it on one thread; fixed with two-dimensional blocking. The remaining gap on the development laptop is hardware: its 15 W CPU slows down by about 60% after 10-20 s with 4 busy cores (sustained 4-core speed-up about 2.5x).
+- **Memory footprint:** the fitting loop holds about 20 copies of K x (I + J) doubles (dominated by P); moving the quasi-Newton step into C++ would cut this to about 12 (in progress). Fitting on a subset of loci and then estimating P for the rest in chunks would bound it further.
 - **Tuning from the original plan:** tile size and OpenMP schedule were left as the agent set them, and the optional in-memory copy of the subset was never built.
 
 **Missing features**

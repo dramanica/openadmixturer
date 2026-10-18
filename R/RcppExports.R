@@ -13,6 +13,10 @@ oadm_loglik_cpp <- function(geno_ptr, q, p, n_cores) {
     .Call(`_openadmixturer_oadm_loglik_cpp`, geno_ptr, q, p, n_cores)
 }
 
+oadm_q_segments_cpp <- function(I, J) {
+    .Call(`_openadmixturer_oadm_q_segments_cpp`, I, J)
+}
+
 oadm_deviance_cpp <- function(geno_ptr, q, p, n_cores) {
     .Call(`_openadmixturer_oadm_deviance_cpp`, geno_ptr, q, p, n_cores)
 }

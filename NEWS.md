@@ -10,3 +10,7 @@
 * Cross-validation as in ADMIXTURE (`crossval = TRUE`, `n_folds = 5`), filling
   the `cv` element of `gt_admix` objects, so that `autoplot(type = "cv")` can
   be used to choose K.
+* Better multithreading with few individuals: the Q-side kernels also split
+  the loci into segments when there are too few blocks of individuals to
+  keep the threads busy (e.g. 50 individuals: 1.0x -> 3.5x speed-up of the
+  Q update on 4 cores). Results remain identical for any number of cores.
