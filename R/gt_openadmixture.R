@@ -88,8 +88,8 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
   if (length(n_runs) != 1 || is.na(n_runs) || n_runs < 1) {
     stop("'n_runs' should be a positive integer", call. = FALSE)
   }
-  if (!is.null(seed) && length(seed) != n_runs &&
-    length(seed) != (n_runs * length(k))) {
+  n_seeds_ok <- length(seed) %in% c(n_runs, n_runs * length(k))
+  if (!is.null(seed) && !n_seeds_ok) {
     stop(
       "'seed' should be a vector of length 'n_runs' OR 'n_runs' * ",
       "'length(k)'",
@@ -128,15 +128,17 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
   if (!is.null(seed)) {
     if (exists(".Random.seed", envir = globalenv())) {
       old_seed <- get(".Random.seed", envir = globalenv())
-      on.exit(assign(".Random.seed", old_seed, envir = globalenv()))
+      on.exit(assign(".Random.seed", old_seed, envir = globalenv())) # nolint
     } else {
       on.exit(rm(".Random.seed", envir = globalenv()))
     }
   }
 
   loci_names <- tidypopgen::show_loci(x)$name
-  adm_list <- list(k = integer(0), Q = list(), P = list(), log = list(),
-                   loglik = numeric(0), converged = logical(0))
+  adm_list <- list(
+    k = integer(0), Q = list(), P = list(), log = list(),
+    loglik = numeric(0), converged = logical(0)
+  )
   index <- 1
   for (this_k in k) {
     for (this_rep in seq_len(n_runs)) {

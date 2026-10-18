@@ -6,3 +6,4 @@
 ^\.lintr$
 ^\.claude$
 ^dev$
+^README\.Rmd$

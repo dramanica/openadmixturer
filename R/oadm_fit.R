@@ -39,10 +39,11 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
   n_indiv <- data$n_indiv
   n_loci <- data$n_loci
   geno_ptr <- data$geno_ptr
-  log_lines <- character(0)
+  log_env <- new.env()
+  log_env$lines <- character(0)
   log_msg <- function(...) {
     line <- paste0(...)
-    log_lines <<- c(log_lines, line)
+    log_env$lines <- c(log_env$lines, line)
     if (verbose) message(line)
   }
 
@@ -145,7 +146,7 @@ oadm_fit <- function(data, k, init_q = NULL, init_p = NULL,
     loglik_history = ll_history,
     n_iter = iter,
     converged = converged,
-    log = log_lines
+    log = log_env$lines
   )
 }
 
