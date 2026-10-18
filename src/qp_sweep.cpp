@@ -351,12 +351,22 @@ int qp_solve_column(const double* H, const double* grad, const double* par,
     // (u_i > 0 at the lower bound, u_i < 0 at the upper bound), the
     // objective can still be improved by freeing that parameter, so it is
     // swept back into the Newton system and the loop continues.
+    //
+    // Deviation from OpenADMIXTURE.jl: Julia sweeps the violating parameter
+    // without checking its pivot tab[i, i], whereas the inverse sweep above
+    // is guarded by |tab[i, i]| > 1e-10. A (near) zero pivot here would
+    // divide by zero inside sweep() and fill the tableau, and therefore
+    // delta, with Inf/NaN. We apply the same 1e-10 guard: a parameter whose
+    // pivot has vanished cannot usefully re-enter the Newton system (its
+    // curvature, once the other free parameters are accounted for, is zero),
+    // so it is left on its bound. When the pivot is healthy, which is
+    // always the case in our tests, the behaviour is identical to Julia's.
     for (int i = 0; i < p; i++) {
       const double ui = tab[i + last * n];
       const double est = par[i] + delta[i];
       const bool violation = (ui > 0 && pmin >= est - small) ||
         (ui < 0 && pmax <= est + small);
-      if (!swept[i] && violation) {
+      if (!swept[i] && std::fabs(tab[i + i * n]) > 1e-10 && violation) {
         sweep(tab, n, i, tmp, false);
         swept[i] = 1;
         cycle = true;

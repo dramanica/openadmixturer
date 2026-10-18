@@ -1,6 +1,7 @@
 // Port of OpenADMIXTURE.jl src/projections.jl (project_q!, project_p!).
 #include "projections.h"
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <vector>
 
@@ -40,6 +41,23 @@ void project_q(double* q, int K, double eps) {
     heap_buf.resize(K);
     b = heap_buf.data();
   }
+  // Deviation from OpenADMIXTURE.jl: guard against non-finite input.
+  // Julia's project_q! assumes finite values. Here a NaN would reach
+  // std::sort with std::greater, which requires a strict weak ordering that
+  // NaN breaks; that is undefined behaviour and, in practice, can make the
+  // sort read outside the buffer. An infinite value would sort fine but turn
+  // the threshold, and hence every entry, into NaN. Neither should happen
+  // (the kernels discard non-finite Newton steps and the R code discards
+  // non-finite quasi-Newton steps before projecting), so this is a last
+  // line of defence: rather than propagate garbage, the column is reset to
+  // the centre of the simplex (1 / K each), a valid point from which the
+  // following iterations can recover.
+  for (int k = 0; k < K; k++) {
+    if (!std::isfinite(q[k])) {
+      for (int k2 = 0; k2 < K; k2++) q[k2] = 1.0 / K;
+      return;
+    }
+  }
   // mass left once every entry has been given its eps floor
   const double tau = 1.0 - K * eps;
   // shift to x = q - eps (in place) and take a copy to sort
@@ -77,6 +95,19 @@ void project_q(double* q, int K, double eps) {
 // intervals, so the Euclidean projection is simply entry-wise clamping to
 // [eps, 1 - eps]. K here is just the number of entries, so callers may pass
 // a whole matrix at once.
+//
+// Deviation from OpenADMIXTURE.jl: NaN entries are set to 0.5. Clamping
+// already maps -Inf to eps and +Inf to 1 - eps, but std::max and std::min
+// let NaN through unchanged (every comparison with NaN is false), and a NaN
+// frequency would make the log-likelihood NaN for the whole locus. As in
+// project_q, this should never trigger, and 0.5 (the centre of the box) is
+// simply a valid value to restart from.
 void project_p(double* p, int K, double eps) {
-  for (int k = 0; k < K; k++) p[k] = std::min(std::max(p[k], eps), 1.0 - eps);
+  for (int k = 0; k < K; k++) {
+    if (std::isnan(p[k])) {
+      p[k] = 0.5;
+      continue;
+    }
+    p[k] = std::min(std::max(p[k], eps), 1.0 - eps);
+  }
 }

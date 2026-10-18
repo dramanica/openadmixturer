@@ -106,6 +106,21 @@
 // called inside a parallel region: R is not thread safe and an R error would
 // longjmp out of the OpenMP region. All validation happens beforehand, in
 // the Rcpp wrappers at the bottom of this file.
+//
+// Deviations from OpenADMIXTURE.jl
+// --------------------------------
+// The kernels follow the Julia code, except for the following, each
+// documented where it is implemented:
+// - the binomial number of trials is n_i (2 or 1, for pseudohaploids)
+//   rather than the constant 2;
+// - the EM update of q is normalised by the number of observed loci of
+//   each individual rather than by J, which keeps q on the simplex with
+//   missing data (oadm_em());
+// - a Newton step that is not finite is discarded, keeping the current
+//   column for that sweep (discard_nonfinite_step());
+// - and, in the solver and projections called by the update kernels, mu is
+//   floored at 0, vanishing pivots are never swept (qp_sweep.cpp) and
+//   non-finite values are tolerated (projections.cpp).
 
 #include <Rcpp.h>
 #include <algorithm>
@@ -446,6 +461,13 @@ static inline double pow012(double x, double e) {
 // overflow either.)
 static const int LOG_BATCH = 8;
 static const double LOG_MIN_Z = 1e-30;
+// loglik_slice() splits a slice of up to TILE_I individuals into LOG_BATCH
+// interleaved products of LOG_BATCH factors each, so it silently assumes
+// LOG_BATCH * LOG_BATCH == TILE_I. Check this at compile time, so that
+// changing one constant without the other fails to build instead of giving
+// wrong log-likelihoods. (Implementation detail with no Julia counterpart.)
+static_assert(LOG_BATCH * LOG_BATCH == TILE_I,
+              "loglik_slice() requires LOG_BATCH^2 == TILE_I");
 
 // Log-likelihood of one slice (after slice_geno). Each observed genotype
 // contributes g log(x) + h log(y), with x = (g > 0) ? qp : 1 and
@@ -685,6 +707,26 @@ void oadm_grad_p(const GenoView& geno, const double* q, const double* p,
 // every q_ki strictly positive, so that qp never becomes exactly 0 in later
 // iterations. As in Julia, if the QP fails, delta is whatever the solver
 // reached and the projection still returns a feasible column.
+// Deviation from OpenADMIXTURE.jl: discard a non-finite Newton step.
+// Julia adds the QP step to the current column whatever its value. If the
+// gradient or Hessian of a column contains Inf/NaN (e.g. a genotype that is
+// impossible under the current estimates, with qp of exactly 0 or 1), or
+// the QP solver hits a vanishing pivot, delta can contain Inf/NaN, which
+// would then spread to the whole column and, through later iterations, to
+// the log-likelihood. We instead keep the current value of that column for
+// this sweep (delta = 0): the other columns are still updated, and the
+// column gets another chance at the next sweep, when its neighbours have
+// moved. Returns true if the step was discarded.
+static inline bool discard_nonfinite_step(double* delta, int K) {
+  for (int k = 0; k < K; k++) {
+    if (!std::isfinite(delta[k])) {
+      std::fill(delta, delta + K, 0.0);
+      return true;
+    }
+  }
+  return false;
+}
+
 void oadm_update_q(const GenoView& geno, const double* q, const double* p,
                    int K, double* q_new, int n_cores) {
   const size_t I = geno.nrow(), J = geno.ncol(), KK = (size_t) K * K;
@@ -712,6 +754,9 @@ void oadm_update_q(const GenoView& geno, const double* q, const double* p,
       // number of iterations or 0 on failure, is not used, as in Julia)
       qp_solve_column(&hess[KK * ii], &grad[K * ii], qi, K, true,
                       delta.data(), work);
+      // keep the current q_.i if the step is not finite (a deviation from
+      // Julia, see discard_nonfinite_step())
+      discard_nonfinite_step(delta.data(), K);
       double* qn = q_new + K * i;
       for (int k = 0; k < K; k++) qn[k] = qi[k] + delta[k];
       project_q(qn, K);
@@ -747,6 +792,9 @@ void oadm_update_p(const GenoView& geno, const double* q, const double* p,
       const double* pj = p + K * j;
       qp_solve_column(&hess[KK * jj], &grad[K * jj], pj, K, false,
                       delta.data(), work);
+      // keep the current p_.j if the step is not finite (a deviation from
+      // Julia, see discard_nonfinite_step())
+      discard_nonfinite_step(delta.data(), K);
       double* pn = p_new + K * j;
       for (int k = 0; k < K; k++) pn[k] = pj[k] + delta[k];
       project_p(pn, K);

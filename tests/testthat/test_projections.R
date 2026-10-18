@@ -42,3 +42,39 @@ test_that("project_p clamps to [eps, 1 - eps]", {
   )
   expect_identical(p[1, 1], -1)
 })
+
+# The following guards are deviations from OpenADMIXTURE.jl, which assumes
+# finite values throughout (see src/projections.cpp)
+test_that("project_q resets non-finite columns to the centre of the simplex", {
+  q <- matrix(c(
+    NaN, 0.5, 0.5,
+    Inf, 0.2, 0.1,
+    0.2, -Inf, 0.3,
+    0.6, 0.3, 0.1
+  ), 3, 4)
+  out <- oadm_project_q_cpp(q)
+  expect_identical(out[, 1:3], matrix(1 / 3, 3, 3))
+  # finite columns are unaffected
+  expect_equal(out[, 4], c(0.6, 0.3, 0.1), tolerance = 1e-14)
+  expect_false(anyNA(out))
+})
+
+test_that("project_p maps NaN to 0.5 and clamps infinite values", {
+  p <- matrix(c(NaN, Inf, -Inf, 0.3), 2, 2)
+  expect_identical(
+    oadm_project_p_cpp(p),
+    matrix(c(0.5, 1 - 1e-5, 1e-5, 0.3), 2, 2)
+  )
+})
+
+test_that("project_p handles matrices of any shape column by column", {
+  set.seed(5)
+  p <- matrix(runif(7 * 13, -0.5, 1.5), 7, 13)
+  expected <- pmin(pmax(p, 1e-5), 1 - 1e-5)
+  expect_identical(oadm_project_p_cpp(p), expected)
+  # a single row (K = 1) and a single column
+  one_row <- p[1, , drop = FALSE]
+  one_col <- p[, 1, drop = FALSE]
+  expect_identical(oadm_project_p_cpp(one_row), expected[1, , drop = FALSE])
+  expect_identical(oadm_project_p_cpp(one_col), expected[, 1, drop = FALSE])
+})

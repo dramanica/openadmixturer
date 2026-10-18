@@ -7,6 +7,9 @@
 //   {sum(q) == 1, q >= eps}, in place.
 // project_p: clamp p[0..K-1] to [eps, 1 - eps], in place.
 // Both are thread-safe (no shared state, no R API).
+// Unlike the Julia versions, both tolerate non-finite input (a deviation
+// from OpenADMIXTURE.jl): project_q resets a column containing NaN or Inf
+// to 1 / K, and project_p maps NaN to 0.5 (see projections.cpp).
 //
 // They are applied after every Newton step (src/kernels.cpp, on par + delta
 // from the QP solver), after the quasi-Newton extrapolation in the R

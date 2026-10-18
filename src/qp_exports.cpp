@@ -52,11 +52,22 @@ NumericMatrix oadm_project_q_cpp(const NumericMatrix& q) {
 }
 
 // Clamp every entry of p to [1e-5, 1 - 1e-5]; returns a copy.
-// Clamping is entry-wise, so the whole matrix is treated as one long
-// vector regardless of its shape.
+// p is K x J (one column per locus, the layout used internally).
+//
+// Clamping is entry-wise, so we could clamp the whole matrix in one call,
+// and the first version did exactly that, passing out.size() as the length.
+// But project_p() takes an int (it was written for a single column of K
+// values, as in Julia), and out.size() is an R_xlen_t: with more than
+// 2^31 - 1 entries (e.g. K = 10 and over 215 million loci) the length would
+// overflow and the call would clamp the wrong number of entries. Clamping
+// one column at a time, as project_q() does above, keeps every length equal
+// to K, and the size_t cast keeps the offset from overflowing. (This
+// wrapper is specific to this package, so there is no Julia counterpart.)
 // [[Rcpp::export]]
 NumericMatrix oadm_project_p_cpp(const NumericMatrix& p) {
   NumericMatrix out = clone(p);
-  project_p(out.begin(), out.size());
+  const int K = out.nrow(), n = out.ncol();
+  double* x = out.begin();
+  for (int j = 0; j < n; j++) project_p(x + (size_t) j * K, K);
   return out;
 }

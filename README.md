@@ -55,7 +55,14 @@ Differences from the Julia implementation:
   locus);
 - with missing data, the EM update of Q is normalised by the number of
   observed loci of each individual, which keeps Q on the simplex;
-- sparse K-means AIM selection (SKFR) is not (yet) implemented.
+- sparse K-means AIM selection (SKFR) is not (yet) implemented;
+- a few numerical safeguards that the Julia code lacks: the conditioning
+  penalty of the Q quadratic program is never negative, the active-set
+  solver never sweeps a vanishing pivot, Newton steps that are not finite
+  are discarded (the column keeps its current value for that sweep), and
+  the projections tolerate non-finite values. None of these changes the
+  results when the computations are well behaved; each is documented in the
+  C++ source as a deviation from OpenADMIXTURE.jl.
 
 P gives the frequency of the **alternate** allele of each locus.
 

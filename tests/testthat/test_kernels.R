@@ -221,3 +221,27 @@ test_that("update_q followed by update_p increases the log-likelihood", {
   expect_gt(ll2, ll1)
   expect_equal(ll2, ref_loglik(inp$g, inp$n, q, p), tolerance = 1e-10)
 })
+
+# Deviation from OpenADMIXTURE.jl: non-finite Newton steps are discarded
+# (see discard_nonfinite_step() in src/kernels.cpp)
+test_that("update kernels keep a column whose Newton step is not finite", {
+  geno <- rbind(c(2, 0, 1), c(0, 1, 2), c(1, 2, 0), c(2, 2, 1))
+  dat <- oadm_attach(oadm_prepare(make_test_gt(geno)))
+  q <- matrix(c(0.5, 0.5, 0.3, 0.7, 0.6, 0.4, 0.2, 0.8), 2, 4)
+  p <- matrix(c(0.4, 0.6, 0.3, 0.2, 0.7, 0.5), 2, 3)
+  # individual 1 is entirely from population 1, whose allele frequency at
+  # locus 1 is exactly 0, yet it carries two copies: qp = 0 and g > 0, so
+  # its gradient is infinite
+  q[, 1] <- c(1, 0)
+  p[1, 1] <- 0
+  q_new <- oadm_update_q_cpp(dat$geno_ptr, q, p, 1)
+  expect_false(anyNA(q_new))
+  # the step for individual 1 is discarded: its column is only projected
+  expect_equal(q_new[, 1], c(1 - 1e-5, 1e-5))
+  # the other individuals are still updated
+  expect_false(isTRUE(all.equal(q_new[, -1], q[, -1])))
+  # likewise for locus 1 in the P update
+  p_new <- oadm_update_p_cpp(dat$geno_ptr, q, p, 1)
+  expect_false(anyNA(p_new))
+  expect_equal(p_new[, 1], c(1e-5, 0.6))
+})
