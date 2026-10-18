@@ -79,6 +79,11 @@ results are stored as fixtures, and the tests need neither Julia nor
 ADMIXTURE. How the fixtures were created, and how to regenerate them, is
 explained in [`data-raw/README.md`](data-raw/README.md).
 
+The vignette (`vignette("openadmixturer")`) compares `gt_openadmixture()`
+with the original ADMIXTURE program, installed via
+[`tidygenclust`](https://github.com/EvolEcolGroup/tidygenclust), on the
+*Anolis punctatus* dataset distributed with `tidypopgen`.
+
 ## Speed
 
 On `EUR_subset` (379 individuals, 54,051 SNPs), both programs reach the same
@@ -100,8 +105,3 @@ accordingly), `gt_openadmixture()` took 16.8, 39.1 and 46.0 seconds on one
 thread, still 2.2-2.8 times faster than ADMIXTURE. Since these measurements,
 skipping log-likelihood evaluations that the algorithm does not need has
 made `gt_openadmixture()` about 10% faster.
-
-The vignette (`vignette("openadmixturer")`) compares `gt_openadmixture()`
-with the original ADMIXTURE program, installed via
-[`tidygenclust`](https://github.com/EvolEcolGroup/tidygenclust), on the
-*Anolis punctatus* dataset distributed with `tidypopgen`.
