@@ -27,9 +27,48 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// oadm_qp_solve_cpp
+List oadm_qp_solve_cpp(const NumericMatrix& H, const NumericVector& grad, const NumericVector& par, bool simplex);
+RcppExport SEXP _openadmixturer_oadm_qp_solve_cpp(SEXP HSEXP, SEXP gradSEXP, SEXP parSEXP, SEXP simplexSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type H(HSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type grad(gradSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type par(parSEXP);
+    Rcpp::traits::input_parameter< bool >::type simplex(simplexSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_qp_solve_cpp(H, grad, par, simplex));
+    return rcpp_result_gen;
+END_RCPP
+}
+// oadm_project_q_cpp
+NumericMatrix oadm_project_q_cpp(const NumericMatrix& q);
+RcppExport SEXP _openadmixturer_oadm_project_q_cpp(SEXP qSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type q(qSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_project_q_cpp(q));
+    return rcpp_result_gen;
+END_RCPP
+}
+// oadm_project_p_cpp
+NumericMatrix oadm_project_p_cpp(const NumericMatrix& p);
+RcppExport SEXP _openadmixturer_oadm_project_p_cpp(SEXP pSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type p(pSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_project_p_cpp(p));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 6},
+    {"_openadmixturer_oadm_qp_solve_cpp", (DL_FUNC) &_openadmixturer_oadm_qp_solve_cpp, 4},
+    {"_openadmixturer_oadm_project_q_cpp", (DL_FUNC) &_openadmixturer_oadm_project_q_cpp, 1},
+    {"_openadmixturer_oadm_project_p_cpp", (DL_FUNC) &_openadmixturer_oadm_project_p_cpp, 1},
     {NULL, NULL, 0}
 };
 

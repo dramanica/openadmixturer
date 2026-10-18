@@ -5,3 +5,15 @@ oadm_decode_cpp <- function(BM, rowInd, colInd, lut, n_trials, scale) {
     .Call(`_openadmixturer_oadm_decode_cpp`, BM, rowInd, colInd, lut, n_trials, scale)
 }
 
+oadm_qp_solve_cpp <- function(H, grad, par, simplex) {
+    .Call(`_openadmixturer_oadm_qp_solve_cpp`, H, grad, par, simplex)
+}
+
+oadm_project_q_cpp <- function(q) {
+    .Call(`_openadmixturer_oadm_project_q_cpp`, q)
+}
+
+oadm_project_p_cpp <- function(p) {
+    .Call(`_openadmixturer_oadm_project_p_cpp`, p)
+}
+
