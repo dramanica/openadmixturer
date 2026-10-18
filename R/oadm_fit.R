@@ -1,6 +1,6 @@
 #' Fit the OpenADMIXTURE model for a single value of K
 #'
-#' This is the engine behind [gt_openadmixture()]. It follows
+#' This is the engine behind `gt_openadmixture()`. It follows
 #' `admixture_qn!()` in OpenADMIXTURE.jl: a random start (or user supplied
 #' starting values), a few EM iterations to prime the estimates, and then
 #' block-wise constrained Newton updates of Q and P accelerated by the
@@ -175,9 +175,6 @@ oadm_qn_step <- function(x0, x1, u_mat, v_mat) {
 #' @keywords internal
 #' @noRd
 oadm_attach <- function(data) {
-  data$geno_ptr <- oadm_geno_ptr(
-    data$fbm, data$rows, data$cols, data$lut,
-    data$n_trials, data$scale
-  )
+  data$geno_ptr <- oadm_geno(data)
   data
 }

@@ -1,0 +1,223 @@
+sim <- simulate_admixed(n = 60, m = 200, k = 3, missing = 0.05)
+
+test_that("kernels match the reference on simulated data with missing values", {
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  expect_true(anyNA(inp$g))
+  expect_kernels_match_reference(inp, k = 3)
+  expect_kernels_match_reference(inp, k = 1)
+})
+
+test_that("kernels match the reference on unsorted rows and columns", {
+  test_gt <- make_test_gt(sim$genotypes)
+  rows <- c(5, 2, 9, 1, 33, 17, 60, 41, 12, 8, 25)
+  cols <- c(150, 3, 77, 1, 200, 64, 65, 12, 199, 100, 2, 130)
+  # a literal vector, as tidyselect deprecates external vectors
+  sub_gt <- tidypopgen::select_loci(
+    test_gt[rows, ],
+    c(150, 3, 77, 1, 200, 64, 65, 12, 199, 100, 2, 130)
+  )
+  inp <- ref_inputs(sub_gt)
+  expect_equal(inp$g, sim$genotypes[rows, cols], ignore_attr = TRUE)
+  expect_kernels_match_reference(inp, k = 3)
+})
+
+test_that("kernels match the reference with pseudohaploids", {
+  hap_genotypes <- sim$genotypes
+  # make the first 15 individuals fully homozygous
+  hom <- 1:15
+  hap_genotypes[hom, ] <- 2 * (hap_genotypes[hom, ] >= 1)
+  pseudo_gt <- tidypopgen::gt_pseudohaploid(make_test_gt(hap_genotypes))
+  inp <- ref_inputs(pseudo_gt)
+  expect_true(any(inp$n == 1))
+  expect_true(any(inp$n == 2))
+  expect_kernels_match_reference(inp, k = 3)
+})
+
+test_that("kernels handle tiles at the edges and tiny data", {
+  big <- simulate_admixed(n = 130, m = 150, k = 2, seed = 3)
+  inp <- ref_inputs(make_test_gt(big$genotypes))
+  expect_kernels_match_reference(inp, k = 4)
+  tiny <- simulate_admixed(n = 3, m = 2, k = 2, missing = 0, seed = 4)
+  inp <- ref_inputs(make_test_gt(tiny$genotypes))
+  expect_kernels_match_reference(inp, k = 2)
+})
+
+test_that("loglik handles extreme frequencies and non-integer dosages", {
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  st <- ref_start(60, 200, 3)
+  p <- st$p
+  # tiny qp where some genotypes are 2 (finite but below the batching limit)
+  j_tiny <- which(colSums(inp$g == 2, na.rm = TRUE) > 0)[1:3]
+  p[, j_tiny] <- 1e-16
+  # exact 0 and 1 where they do not make the likelihood infinite
+  j_zero <- which(colSums(inp$g > 0, na.rm = TRUE) == 0)
+  j_one <- which(colSums(inp$g < 2, na.rm = TRUE) == 0)
+  p[, j_zero] <- 0
+  p[, j_one] <- 1
+  ll <- oadm_loglik_cpp(inp$geno, st$q, p, 2)
+  expect_true(is.finite(ll))
+  expect_equal(ll, ref_loglik(inp$g, inp$n, st$q, p), tolerance = 1e-10)
+  # a qp of exactly 0 for an observed alt allele gives -Inf, not NaN
+  p[, 1] <- 0
+  if (any(inp$g[, 1] > 0, na.rm = TRUE)) {
+    expect_identical(oadm_loglik_cpp(inp$geno, st$q, p, 2), -Inf)
+  }
+  # dosages that are not hard calls use the direct formula
+  dat <- inp$dat
+  dat$lut[1:3] <- c(0, 0.7, 2)
+  geno <- oadm_geno(dat)
+  g <- oadm_decode(dat)
+  expect_true(any(g == 0.7, na.rm = TRUE))
+  expect_equal(
+    oadm_loglik_cpp(geno, st$q, st$p, 2),
+    ref_loglik(g, inp$n, st$q, st$p),
+    tolerance = 1e-10
+  )
+})
+
+test_that("gradients and Hessians match numerical derivatives", {
+  small <- simulate_admixed(n = 7, m = 12, k = 2, missing = 0.1, seed = 5)
+  hom <- 1:2
+  small$genotypes[hom, ] <- 2 * (small$genotypes[hom, ] >= 1)
+  inp <- ref_inputs(tidypopgen::gt_pseudohaploid(
+    make_test_gt(small$genotypes)
+  ))
+  st <- ref_start(7, 12, 3)
+  q <- st$q
+  p <- st$p
+  gq <- oadm_grad_q_cpp(inp$geno, q, p, 1)
+  gp <- oadm_grad_p_cpp(inp$geno, q, p, 1)
+  # Like OpenADMIXTURE, the Q block differentiates the log-likelihood written
+  # as a homogeneous function of q (1 - qp = sum_k q_k (1 - p_k) on the
+  # simplex), which only changes the gradient by a constant across k
+  ll_q <- function(x) ref_loglik_homog(inp$g, inp$n, matrix(x, nrow(q)), p)
+  ll_p <- function(x) ref_loglik(inp$g, inp$n, q, matrix(x, nrow(p)))
+  expect_equal(as.vector(gq$grad), numDeriv::grad(ll_q, as.vector(q)),
+    tolerance = 1e-6
+  )
+  expect_equal(as.vector(gp$grad), numDeriv::grad(ll_p, as.vector(p)),
+    tolerance = 1e-6
+  )
+  # on the simplex, the two forms have the same directional derivatives
+  true_grad <- matrix(numDeriv::grad(
+    function(x) ref_loglik(inp$g, inp$n, matrix(x, nrow(q)), p),
+    as.vector(q)
+  ), nrow(q))
+  shift <- gq$grad - true_grad
+  expect_equal(shift, matrix(shift[1, ], nrow(q), ncol(q), byrow = TRUE),
+    tolerance = 1e-6
+  )
+  # the kernels return the negative Hessian of each column
+  ll_qi <- function(x, i) {
+    q[, i] <- x
+    ref_loglik_homog(inp$g, inp$n, q, p)
+  }
+  ll_pj <- function(x, j) {
+    p[, j] <- x
+    ref_loglik(inp$g, inp$n, q, p)
+  }
+  for (i in c(1, 4)) {
+    expect_equal(gq$hess[, , i], -numDeriv::hessian(ll_qi, q[, i], i = i),
+      tolerance = 1e-5
+    )
+  }
+  for (j in c(2, 12)) {
+    expect_equal(gp$hess[, , j], -numDeriv::hessian(ll_pj, p[, j], j = j),
+      tolerance = 1e-5
+    )
+  }
+})
+
+test_that("results do not depend on the number of cores", {
+  big <- simulate_admixed(n = 130, m = 150, k = 3, seed = 6)
+  inp <- ref_inputs(make_test_gt(big$genotypes))
+  st <- ref_start(130, 150, 3)
+  kernels <- list(
+    oadm_loglik_cpp, oadm_em_cpp, oadm_grad_q_cpp, oadm_grad_p_cpp,
+    oadm_update_q_cpp, oadm_update_p_cpp
+  )
+  for (kernel in kernels) {
+    res1 <- kernel(inp$geno, st$q, st$p, 1)
+    expect_identical(kernel(inp$geno, st$q, st$p, 2), res1)
+    expect_identical(kernel(inp$geno, st$q, st$p, 4), res1)
+  }
+})
+
+test_that("kernels do not modify their inputs", {
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  st <- ref_start(60, 200, 3)
+  q <- st$q + 0
+  p <- st$p + 0
+  invisible(oadm_em_cpp(inp$geno, q, p, 2))
+  invisible(oadm_update_q_cpp(inp$geno, q, p, 2))
+  invisible(oadm_update_p_cpp(inp$geno, q, p, 2))
+  expect_identical(q, st$q)
+  expect_identical(p, st$p)
+})
+
+test_that("dimension mismatches and invalid pointers are errors", {
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  st <- ref_start(60, 200, 3)
+  expect_error(
+    oadm_loglik_cpp(inp$geno, st$q[, -1], st$p, 1),
+    "one column per individual"
+  )
+  expect_error(
+    oadm_em_cpp(inp$geno, st$q, st$p[, -1], 1),
+    "one column per locus"
+  )
+  expect_error(
+    oadm_grad_q_cpp(inp$geno, st$q, st$p[-1, ], 1),
+    "same number of rows"
+  )
+  expect_error(
+    oadm_grad_p_cpp(inp$geno, st$q, st$p, 0),
+    "n_cores"
+  )
+  expect_error(
+    oadm_update_q_cpp(inp$geno, st$q[0, ], st$p[0, ], 1),
+    "at least one row"
+  )
+  expect_error(
+    oadm_update_p_cpp(list(), st$q, st$p, 1),
+    "oadm_geno_ptr"
+  )
+})
+
+test_that("update_q returns columns on the simplex", {
+  skip_if(!has_real_qp(), "QP solver not available yet")
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  st <- ref_start(60, 200, 3)
+  q_new <- oadm_update_q_cpp(inp$geno, st$q, st$p, 2)
+  expect_equal(dim(q_new), dim(st$q))
+  expect_equal(colSums(q_new), rep(1, 60), tolerance = 1e-8)
+  expect_true(all(q_new >= 0))
+  p_new <- oadm_update_p_cpp(inp$geno, st$q, st$p, 2)
+  expect_true(all(p_new > 0 & p_new < 1))
+})
+
+test_that("update_q followed by update_p increases the log-likelihood", {
+  skip_if(!has_real_qp(), "QP solver not available yet")
+  inp <- ref_inputs(make_test_gt(sim$genotypes))
+  st <- ref_start(60, 200, 3)
+  q <- st$q
+  p <- st$p
+  # prime with a few EM steps, as in OpenADMIXTURE
+  for (it in 1:5) {
+    em <- oadm_em_cpp(inp$geno, q, p, 2)
+    q <- em$q
+    p <- em$p
+  }
+  # with missing data, the EM step (like OpenADMIXTURE's) leaves the columns
+  # of q summing to less than 1, and the Q block quadratic model is only
+  # valid on the simplex
+  q <- oadm_project_q_cpp(q)
+  ll0 <- oadm_loglik_cpp(inp$geno, q, p, 2)
+  q <- oadm_update_q_cpp(inp$geno, q, p, 2)
+  ll1 <- oadm_loglik_cpp(inp$geno, q, p, 2)
+  p <- oadm_update_p_cpp(inp$geno, q, p, 2)
+  ll2 <- oadm_loglik_cpp(inp$geno, q, p, 2)
+  expect_gt(ll1, ll0)
+  expect_gt(ll2, ll1)
+  expect_equal(ll2, ref_loglik(inp$g, inp$n, q, p), tolerance = 1e-10)
+})
