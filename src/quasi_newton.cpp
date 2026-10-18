@@ -1,7 +1,7 @@
 // Quasi-Newton acceleration of Zhou, Alexander and Lange (2011), as in
 // update_UV!() and update_QN!() of OpenADMIXTURE.jl (src/quasi_newton.jl).
 //
-// The fitting loop (R/oadm_fit.R) applies the block-update map F twice per
+// The fitting loop (src/fit.cpp) applies the block-update map F twice per
 // iteration, giving x0 (the current estimate), x1 = F(x0) and x2 = F(x1),
 // where x = (q, p) stacks all the parameters. The last n_qn secant pairs
 // u = x1 - x0 and v = x2 - x1 are kept as the columns of U and V, and the
@@ -27,10 +27,10 @@
 // only when the garbage collector runs, the peak memory of a fit reached
 // about 30 copies of the parameters. Here U and V are kept in a single
 // object for the whole fit, and the step is computed directly from the Q and
-// P blocks, without stacking them and without temporary vectors: the only
-// new allocation is the projected result. This is purely an implementation
-// change: the arithmetic is the same as in the Julia code (up to rounding,
-// as sums are accumulated in a different order).
+// P blocks, without stacking them and without temporary vectors, writing the
+// result into buffers owned by the fitting loop. This is purely an
+// implementation change: the arithmetic is the same as in the Julia code (up
+// to rounding, as sums are accumulated in a different order).
 //
 // Determinism: the long sums (inner products over K (I + J) values) are
 // split into fixed chunks whose partial sums are added up in order, so the
@@ -42,57 +42,19 @@
 #include <cmath>
 #include <vector>
 #include "projections.h"
+#include "quasi_newton.h"
 
 using namespace Rcpp;
-
-// The secant pairs: U and V are n_par x n_qn, column-major, with each column
-// laid out as x = (q, p): the K x I values of q followed by the K x J values
-// of p, both column-major (the internal layout of the fitting loop).
-struct QNState {
-  size_t n_par, n_qn;
-  std::vector<double> U, V;
-  QNState(size_t n_par, size_t n_qn)
-    : n_par(n_par), n_qn(n_qn), U(n_par * n_qn, 0.0), V(n_par * n_qn, 0.0) {}
-};
 
 // number of values per chunk of the long sums (fixed, so that results do not
 // depend on the number of threads)
 static const size_t QN_CHUNK = 65536;
 
-static QNState& get_state(SEXP state) {
-  XPtr<QNState> ptr(state);
-  if (ptr.get() == NULL)
-    stop("the quasi-Newton state is no longer valid");
-  return *ptr;
-}
-
-// Create the secant pairs for a fit with n_par = K (I + J) parameters,
-// keeping the last n_qn pairs.
-// [[Rcpp::export]]
-SEXP oadm_qn_new_cpp(double n_par, int n_qn) {
-  if (n_par < 1 || n_qn < 1) stop("'n_par' and 'n_qn' must be positive");
-  XPtr<QNState> ptr(new QNState((size_t) n_par, (size_t) n_qn), true);
-  return ptr;
-}
-
-// Store the secant pair of this iteration in column `col` (1-based) of U and
-// V: u = x1 - x0 and v = x2 - x1, with x0 = (q, p), x1 = (q1, p1) and
-// x2 = (q2, p2). The columns are reused cyclically by the caller, so U and V
-// always hold the last n_qn pairs.
-// [[Rcpp::export]]
-void oadm_qn_push_cpp(SEXP state, int col, const NumericMatrix& q,
-                  const NumericMatrix& p, const NumericMatrix& q1,
-                  const NumericMatrix& p1, const NumericMatrix& q2,
-                  const NumericMatrix& p2) {
-  QNState& st = get_state(state);
-  const size_t nq = q.size(), np = p.size();
-  if (nq + np != st.n_par || (size_t) q1.size() != nq ||
-      (size_t) q2.size() != nq || (size_t) p1.size() != np ||
-      (size_t) p2.size() != np)
-    stop("the dimensions of q and p do not match the quasi-Newton state");
-  if (col < 1 || (size_t) col > st.n_qn) stop("'col' is out of range");
-  double* u = &st.U[(size_t) (col - 1) * st.n_par];
-  double* v = &st.V[(size_t) (col - 1) * st.n_par];
+void qn_push(QNState& st, size_t col, const double* q, const double* p,
+             const double* q1, const double* p1, const double* q2,
+             const double* p2, size_t nq, size_t np) {
+  double* u = &st.U[col * st.n_par];
+  double* v = &st.V[col * st.n_par];
   // the q block, then the p block
   for (size_t t = 0; t < nq; t++) {
     u[t] = q1[t] - q[t];
@@ -104,26 +66,11 @@ void oadm_qn_push_cpp(SEXP state, int col, const NumericMatrix& q,
   }
 }
 
-// The quasi-Newton step from x1 = (q1, p1), using the first n_used columns of
-// U and V, projected back onto the feasible set (each column of q onto the
-// simplex, p into [1e-5, 1 - 1e-5]). Returns list(q, p), or NULL if the
-// n_used x n_used system is (numerically) singular, in which case the caller
-// skips the quasi-Newton step for this iteration.
-// [[Rcpp::export]]
-SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q,
-                  const NumericMatrix& p, const NumericMatrix& q1,
-                  const NumericMatrix& p1, int n_cores) {
-  QNState& st = get_state(state);
-  const size_t nq = q.size(), np = p.size(), n_par = st.n_par;
-  if (nq + np != n_par || (size_t) q1.size() != nq ||
-      (size_t) p1.size() != np)
-    stop("the dimensions of q and p do not match the quasi-Newton state");
-  if (n_used < 1 || (size_t) n_used > st.n_qn) stop("'n_used' is out of range");
-  if (n_cores < 1) stop("'n_cores' must be at least 1");
-  const size_t m = n_used;
-  // raw pointers, so that nothing in the parallel region touches R objects
-  const double *pq = q.begin(), *pp = p.begin(), *pq1 = q1.begin(),
-    *pp1 = p1.begin();
+bool qn_step(const QNState& st, size_t n_used, const double* q,
+             const double* p, const double* q1, const double* p1, int K,
+             size_t n_indiv, size_t n_loci, double* q_out, double* p_out,
+             int n_cores) {
+  const size_t nq = (size_t) K * n_indiv, n_par = st.n_par, m = n_used;
   const double *U = st.U.data(), *V = st.V.data();
 
   // The small system: lhs = U'(U - V) (m x m) and rhs = U'(x0 - x1) (m),
@@ -140,7 +87,7 @@ SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q,
     double* sums = &partial[c * n_sums];
     for (size_t t = t0; t < t1; t++) {
       // x0 - x1 at position t, read from the q or the p block
-      const double d = t < nq ? pq[t] - pq1[t] : pp[t - nq] - pp1[t - nq];
+      const double d = t < nq ? q[t] - q1[t] : p[t - nq] - p1[t - nq];
       for (size_t a = 0; a < m; a++) {
         const double ua = U[a * n_par + t];
         for (size_t b = 0; b < m; b++)
@@ -163,19 +110,15 @@ SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q,
   // this code used), a system that is singular to machine precision is
   // rejected: this happens when secant pairs are (nearly) collinear, e.g.
   // close to convergence, and the step is then skipped.
-  if (!lhs.is_finite() || !rhs.is_finite()) return R_NilValue;
+  if (!lhs.is_finite() || !rhs.is_finite()) return false;
   const double rc = arma::rcond(lhs);
-  if (!(rc >= DBL_EPSILON)) return R_NilValue;
+  if (!(rc >= DBL_EPSILON)) return false;
   arma::vec coef;
-  if (!arma::solve(coef, lhs, rhs, arma::solve_opts::no_approx))
-    return R_NilValue;
-  if (!coef.is_finite()) return R_NilValue;
+  if (!arma::solve(coef, lhs, rhs, arma::solve_opts::no_approx)) return false;
+  if (!coef.is_finite()) return false;
 
-  // x_qn = x1 - V coef, written straight into the new q and p matrices, then
+  // x_qn = x1 - V coef, written straight into the output buffers, then
   // projected column by column (columns of K values)
-  const int K = q.nrow();
-  NumericMatrix q_new(K, q.ncol()), p_new(K, p.ncol());
-  double *qn = q_new.begin(), *pn = p_new.begin();
   std::vector<double> cf(coef.begin(), coef.end());
 #pragma omp parallel for num_threads(n_cores) schedule(static)
   for (ptrdiff_t c = 0; c < (ptrdiff_t) n_chunks; c++) {
@@ -183,16 +126,74 @@ SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q,
     for (size_t t = t0; t < t1; t++) {
       double step = 0.0;
       for (size_t a = 0; a < m; a++) step += V[a * n_par + t] * cf[a];
-      if (t < nq) qn[t] = pq1[t] - step;
-      else pn[t - nq] = pp1[t - nq] - step;
+      if (t < nq) q_out[t] = q1[t] - step;
+      else p_out[t - nq] = p1[t - nq] - step;
     }
   }
-  const size_t n_indiv = q.ncol(), n_loci = p.ncol();
 #pragma omp parallel for num_threads(n_cores) schedule(static)
   for (ptrdiff_t i = 0; i < (ptrdiff_t) n_indiv; i++)
-    project_q(qn + (size_t) i * K, K);
+    project_q(q_out + (size_t) i * K, K);
 #pragma omp parallel for num_threads(n_cores) schedule(static)
   for (ptrdiff_t j = 0; j < (ptrdiff_t) n_loci; j++)
-    project_p(pn + (size_t) j * K, K);
+    project_p(p_out + (size_t) j * K, K);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// R interface, used by the tests (the fitting loop calls the functions above
+// directly)
+
+static QNState& get_state(SEXP state) {
+  XPtr<QNState> ptr(state);
+  if (ptr.get() == NULL)
+    stop("the quasi-Newton state is no longer valid");
+  return *ptr;
+}
+
+// Create the secant pairs for n_par = K (I + J) parameters, keeping the last
+// n_qn pairs.
+// [[Rcpp::export]]
+SEXP oadm_qn_new_cpp(double n_par, int n_qn) {
+  if (n_par < 1 || n_qn < 1) stop("'n_par' and 'n_qn' must be positive");
+  XPtr<QNState> ptr(new QNState((size_t) n_par, (size_t) n_qn), true);
+  return ptr;
+}
+
+// Store a secant pair in column `col` (1-based); see qn_push().
+// [[Rcpp::export]]
+void oadm_qn_push_cpp(SEXP state, int col, const NumericMatrix& q,
+                      const NumericMatrix& p, const NumericMatrix& q1,
+                      const NumericMatrix& p1, const NumericMatrix& q2,
+                      const NumericMatrix& p2) {
+  QNState& st = get_state(state);
+  const size_t nq = q.size(), np = p.size();
+  if (nq + np != st.n_par || (size_t) q1.size() != nq ||
+      (size_t) q2.size() != nq || (size_t) p1.size() != np ||
+      (size_t) p2.size() != np)
+    stop("the dimensions of q and p do not match the quasi-Newton state");
+  if (col < 1 || (size_t) col > st.n_qn) stop("'col' is out of range");
+  qn_push(st, col - 1, q.begin(), p.begin(), q1.begin(), p1.begin(),
+          q2.begin(), p2.begin(), nq, np);
+}
+
+// The projected quasi-Newton step from (q1, p1) using the first n_used
+// pairs; returns list(q, p), or NULL if the system is singular (see
+// qn_step()).
+// [[Rcpp::export]]
+SEXP oadm_qn_step_cpp(SEXP state, int n_used, const NumericMatrix& q,
+                      const NumericMatrix& p, const NumericMatrix& q1,
+                      const NumericMatrix& p1, int n_cores) {
+  QNState& st = get_state(state);
+  const size_t nq = q.size(), np = p.size();
+  if (nq + np != st.n_par || (size_t) q1.size() != nq ||
+      (size_t) p1.size() != np)
+    stop("the dimensions of q and p do not match the quasi-Newton state");
+  if (n_used < 1 || (size_t) n_used > st.n_qn) stop("'n_used' is out of range");
+  if (n_cores < 1) stop("'n_cores' must be at least 1");
+  const int K = q.nrow();
+  NumericMatrix q_new(K, q.ncol()), p_new(K, p.ncol());
+  if (!qn_step(st, n_used, q.begin(), p.begin(), q1.begin(), p1.begin(), K,
+               q.ncol(), p.ncol(), q_new.begin(), p_new.begin(), n_cores))
+    return R_NilValue;
   return List::create(Named("q") = q_new, Named("p") = p_new);
 }

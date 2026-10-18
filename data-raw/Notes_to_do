@@ -2,7 +2,7 @@ Open items for openadmixturer
 
 **Performance**
 - **Multi-core scaling:** investigated. The main software limit was the Q side, parallelised over blocks of 64 individuals only, so small samples ran it on one thread; fixed with two-dimensional blocking. The remaining gap on the development laptop is hardware: its 15 W CPU slows down by about 60% after 10-20 s with 4 busy cores (sustained 4-core speed-up about 2.5x).
-- **Memory footprint:** reduced from about 34 to 16 copies of K x (I + J) doubles (dominated by P) by moving the quasi-Newton step into C++ and freeing discarded estimates after each iteration. What remains: the quasi-Newton secant pairs (6 copies; could be stored in single precision, saving 3), the current/intermediate/extrapolated estimates (about 5), the memory-mapped genotypes and a temporary 1 - P in the kernels. A full C++ iteration loop with reused buffers would remove the per-iteration allocations altogether. Fitting on a subset of loci and then estimating P for the rest in chunks would bound memory further.
+- **Memory footprint:** reduced from about 34 to 9 copies of K x (I + J) doubles (dominated by P) by running the whole fitting loop in C++ with reused buffers (src/fit.cpp). What remains: the four sets of estimates of an iteration, the quasi-Newton secant pairs (6 copies; could be stored in single precision, saving 3), the memory-mapped genotypes and a temporary 1 - P in the kernels (which could be kept as a reusable buffer). Fitting on a subset of loci and then estimating P for the rest in chunks would bound memory further.
 - **Tuning from the original plan:** tile size and OpenMP schedule were left as the agent set them, and the optional in-memory copy of the subset was never built.
 
 **Missing features**

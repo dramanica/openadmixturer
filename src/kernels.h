@@ -79,4 +79,9 @@ void oadm_update_p(const GenoView& geno, const double* q, const double* p,
 void oadm_deviance(const GenoView& geno, const double* q, const double* p,
                    int K, int n_cores, double* dev, double* count);
 
+// the GenoView behind an external pointer created by oadm_geno_ptr(), with
+// checks (throws an R error if the pointer is not valid); call it only from
+// the main thread, outside parallel regions
+const GenoView& get_geno(SEXP geno_ptr);
+
 #endif

@@ -185,7 +185,8 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
                              crossval = FALSE, n_folds = 5, n_cores = 1,
                              verbose = FALSE) {
   # This function is a thin wrapper: it checks the arguments, prepares the
-  # data once, and then calls oadm_fit() (R/oadm_fit.R) for each run,
+  # data once, and then calls oadm_fit() (R/oadm_fit.R, which runs the fit in
+  # C++, src/fit.cpp) for each run,
   # collecting the results into a gt_admix object with the same structure as
   # the one returned by tidypopgen::gt_admixture().
 

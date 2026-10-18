@@ -1072,7 +1072,7 @@ SEXP oadm_geno_ptr(Environment BM, IntegerVector rowInd, IntegerVector colInd,
 // External pointers are not serialised: after saveRDS()/readRDS() or a
 // session restart the address becomes NULL, which is caught here instead of
 // crashing.
-static const GenoView& get_geno(SEXP geno_ptr) {
+const GenoView& get_geno(SEXP geno_ptr) {
   if (TYPEOF(geno_ptr) != EXTPTRSXP || R_ExternalPtrTag(geno_ptr) != geno_tag())
     stop("'geno_ptr' must be created by oadm_geno_ptr().");
   XPtr<GenoView> ptr(geno_ptr);

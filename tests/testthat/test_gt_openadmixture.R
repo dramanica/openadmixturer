@@ -148,3 +148,18 @@ test_that("invalid arguments are caught", {
     "not been imputed"
   )
 })
+
+test_that("verbose progress is reported as messages", {
+  small <- make_test_gt(sim$genotypes[1:30, 1:100])
+  expect_message(
+    gt_openadmixture(small, k = 2, seed = 1, verbose = TRUE),
+    "Initial loglikelihood"
+  )
+  expect_silent(suppressMessages(
+    gt_openadmixture(small, k = 2, seed = 1, verbose = TRUE)
+  ))
+  # max_iter = 0 returns the starting estimates
+  adm0 <- gt_openadmixture(small, k = 2, seed = 1, max_iter = 0)
+  expect_false(adm0$converged)
+  expect_match(utils::tail(adm0$log[[1]], 2)[1], "after 0 iterations")
+})

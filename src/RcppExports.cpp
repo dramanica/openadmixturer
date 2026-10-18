@@ -11,6 +11,28 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// oadm_fit_cpp
+List oadm_fit_cpp(SEXP geno_ptr, int k, Nullable<NumericMatrix> init_q, Nullable<NumericMatrix> init_p, bool fix_q, bool fix_p, int max_iter, double rtol, int n_em_iter, int n_qn, int n_cores, bool verbose);
+RcppExport SEXP _openadmixturer_oadm_fit_cpp(SEXP geno_ptrSEXP, SEXP kSEXP, SEXP init_qSEXP, SEXP init_pSEXP, SEXP fix_qSEXP, SEXP fix_pSEXP, SEXP max_iterSEXP, SEXP rtolSEXP, SEXP n_em_iterSEXP, SEXP n_qnSEXP, SEXP n_coresSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type geno_ptr(geno_ptrSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericMatrix> >::type init_q(init_qSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericMatrix> >::type init_p(init_pSEXP);
+    Rcpp::traits::input_parameter< bool >::type fix_q(fix_qSEXP);
+    Rcpp::traits::input_parameter< bool >::type fix_p(fix_pSEXP);
+    Rcpp::traits::input_parameter< int >::type max_iter(max_iterSEXP);
+    Rcpp::traits::input_parameter< double >::type rtol(rtolSEXP);
+    Rcpp::traits::input_parameter< int >::type n_em_iter(n_em_iterSEXP);
+    Rcpp::traits::input_parameter< int >::type n_qn(n_qnSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cores(n_coresSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_fit_cpp(geno_ptr, k, init_q, init_p, fix_q, fix_p, max_iter, rtol, n_em_iter, n_qn, n_cores, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
 // oadm_decode_cpp
 NumericMatrix oadm_decode_cpp(Environment BM, const IntegerVector& rowInd, const IntegerVector& colInd, const NumericVector& lut, const NumericVector& n_trials, const NumericVector& scale, int cv_mode, int cv_fold, int n_folds, double cv_seed);
 RcppExport SEXP _openadmixturer_oadm_decode_cpp(SEXP BMSEXP, SEXP rowIndSEXP, SEXP colIndSEXP, SEXP lutSEXP, SEXP n_trialsSEXP, SEXP scaleSEXP, SEXP cv_modeSEXP, SEXP cv_foldSEXP, SEXP n_foldsSEXP, SEXP cv_seedSEXP) {
@@ -245,6 +267,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_openadmixturer_oadm_fit_cpp", (DL_FUNC) &_openadmixturer_oadm_fit_cpp, 12},
     {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 10},
     {"_openadmixturer_oadm_geno_ptr", (DL_FUNC) &_openadmixturer_oadm_geno_ptr, 10},
     {"_openadmixturer_oadm_loglik_cpp", (DL_FUNC) &_openadmixturer_oadm_loglik_cpp, 4},

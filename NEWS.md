@@ -14,9 +14,10 @@
   the loci into segments when there are too few blocks of individuals to
   keep the threads busy (e.g. 50 individuals: 1.0x -> 3.5x speed-up of the
   Q update on 4 cores). Results remain identical for any number of cores.
-* Lower memory use and faster fits with many loci: the quasi-Newton step is
-  now computed in C++ directly on the Q and P blocks (no stacked copies or R
-  temporaries), and discarded estimates are freed after each iteration when
-  the parameters are large. On 60 individuals x 1.5 million loci (K = 4),
-  peak memory fell from about 34 to 16 copies of the parameters, and the
-  fit became about twice as fast. Results are unchanged.
+* Lower memory use with many loci: the whole fitting loop now runs in C++
+  (src/fit.cpp), with the estimates in buffers allocated once and reused at
+  every iteration, and the quasi-Newton step computed directly on the Q and
+  P blocks. Previously each iteration created new R matrices, and discarded
+  copies of P accumulated until R's garbage collector ran. On 60
+  individuals x 1.5 million loci (K = 4), peak memory fell from about 34 to
+  9 copies of the parameters. Results are unchanged.
