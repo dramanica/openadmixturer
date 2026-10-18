@@ -64,4 +64,10 @@ P gives the frequency of the **alternate** allele of each locus.
 On the `EUR_subset` data used in the OpenADMIXTURE.jl tests (379 individuals,
 54,051 SNPs) with K = 4, `gt_openadmixture()` converges in 23 iterations to a
 log-likelihood of -15,552,194.2, compared with -15,552,193.9 reported by
-OpenADMIXTURE.jl.
+OpenADMIXTURE.jl. The scripts used for this validation are in `data-raw/`:
+run `data-raw/download_eur_subset.R` first to download the data.
+
+The vignette (`vignette("openadmixturer")`) compares `gt_openadmixture()`
+with the original ADMIXTURE program, installed via
+[`tidygenclust`](https://github.com/EvolEcolGroup/tidygenclust), on the
+*Anolis punctatus* dataset distributed with `tidypopgen`.
