@@ -21,6 +21,9 @@
 # downloaded the first time they are needed (see eur_subset_bed() in
 # helper-admixture.R), so the tests are skipped without an internet
 # connection.
+#
+# See data-raw/README.md for how the fixtures were created and how to
+# regenerate them.
 
 skip_on_cran()
 fixture_file <- test_path("fixtures", "admixture_eur.rds")

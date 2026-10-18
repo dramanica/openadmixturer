@@ -22,6 +22,63 @@
 #'   "projection" analysis); the loci of `x` must then match the rows of
 #'   `init_p`.
 #'
+#'   ## Algorithm
+#'
+#'   As in OpenADMIXTURE.jl, each run consists of:
+#'   1. a random initialisation followed by a few EM (FRAPPE) iterations
+#'      (`n_em_iter`);
+#'   2. block-wise Newton updates of Q (one individual at a time, on the
+#'      simplex) and P (one locus at a time, in the unit interval), each
+#'      solved exactly as a small quadratic program with K. Lange's
+#'      sweep-operator active-set method;
+#'   3. quasi-Newton acceleration (Zhou, Alexander and Lange 2011) using the
+#'      last `n_qn` secant pairs, accepted only when it improves the
+#'      log-likelihood.
+#'
+#'   Iterations stop when the relative change in log-likelihood falls below
+#'   `rtol`. All estimates are kept within \[1e-5, 1 - 1e-5\], as in ADMIXTURE
+#'   and OpenADMIXTURE.jl.
+#'
+#'   ## Comparison with ADMIXTURE
+#'
+#'   The model and the log-likelihood are those of ADMIXTURE (Alexander et al.
+#'   2009), and the optimisation is closely related (block updates with
+#'   constrained Newton steps and quasi-Newton acceleration), so both programs
+#'   reach the same maximum likelihood estimates, up to local optima and the
+#'   convergence tolerance. The test suite checks this on the `EUR_subset`
+#'   data used in the OpenADMIXTURE.jl tests. Note that:
+#'   - ADMIXTURE reports the frequency of the second allele in the PLINK bim
+#'     file, which for a `gen_tibble` is the reference allele, so its P
+#'     matrices are 1 - P of those returned here;
+#'   - cross-validation, bootstrap standard errors and supervised analyses
+#'     with individuals of known ancestry, available in ADMIXTURE, are not
+#'     implemented (a fixed reference panel can be used with `init_p` and
+#'     `fix_p`).
+#'
+#'   ## Differences from OpenADMIXTURE.jl
+#'
+#'   Starting from the same values, `gt_openadmixture()` reproduces the
+#'   computations of OpenADMIXTURE.jl to numerical precision (this is checked
+#'   by the test suite), except for the following:
+#'   - there is no GPU (CUDA) support;
+#'   - sparse K-means selection of ancestry informative markers (SKFR) is not
+#'     implemented; loci can be selected beforehand with
+#'     [tidypopgen::select_loci()];
+#'   - pseudohaploid individuals are supported (they contribute one allele
+#'     per locus, whereas OpenADMIXTURE.jl assumes every individual is
+#'     diploid);
+#'   - with missing data, the EM update of Q is normalised by the number of
+#'     loci observed in each individual (OpenADMIXTURE.jl divides by the
+#'     total number of loci, so that Q is pushed off the simplex);
+#'   - a few numerical safeguards that the Julia code lacks: the conditioning
+#'     penalty of the quadratic program for Q is never negative, the
+#'     active-set solver never pivots on a vanishing element, Newton steps
+#'     that are not finite are discarded (the individual or locus keeps its
+#'     current value for that iteration), and the projections onto the
+#'     feasible set tolerate non-finite values. None of these changes the
+#'     results when the computations are well behaved; each is documented in
+#'     the C++ source.
+#'
 #' @references Ko S, Chu BB, Peterson D, Okenwa C, Papp JC, Alexander DH,
 #'   Sobel EM, Zhou H, Lange KL (2023) Unsupervised discovery of ancestry
 #'   informative markers and genetic admixture proportions in biobank-scale
@@ -29,6 +86,10 @@
 #'
 #'   Alexander DH, Novembre J, Lange K (2009) Fast model-based estimation of
 #'   ancestry in unrelated individuals. Genome Research, 19(9), 1655-1664.
+#'
+#'   Zhou H, Alexander D, Lange K (2011) A quasi-Newton acceleration for
+#'   high-dimensional optimization algorithms. Statistics and Computing,
+#'   21(2), 261-273.
 #'
 #' @param x a [`tidypopgen::gen_tibble`] (possibly grouped)
 #' @param k an integer vector giving the number(s) of ancestral populations

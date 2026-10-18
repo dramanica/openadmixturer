@@ -48,57 +48,36 @@ As in OpenADMIXTURE.jl:
 3. quasi-Newton acceleration (Zhou, Alexander and Lange 2011) using the last
    three secant pairs, accepted only when it improves the log-likelihood.
 
-Differences from the Julia implementation:
-
-- there is no GPU (CUDA) support;
-- pseudohaploid individuals are supported (they contribute one allele per
-  locus);
-- with missing data, the EM update of Q is normalised by the number of
-  observed loci of each individual, which keeps Q on the simplex;
-- sparse K-means AIM selection (SKFR) is not (yet) implemented;
-- a few numerical safeguards that the Julia code lacks: the conditioning
-  penalty of the Q quadratic program is never negative, the active-set
-  solver never sweeps a vanishing pivot, Newton steps that are not finite
-  are discarded (the column keeps its current value for that sweep), and
-  the projections tolerate non-finite values. None of these changes the
-  results when the computations are well behaved; each is documented in the
-  C++ source as a deviation from OpenADMIXTURE.jl.
+The model and the log-likelihood are those of ADMIXTURE, so both programs
+reach the same estimates. See the details section of `?gt_openadmixture`
+for a comparison with ADMIXTURE and the (few) differences from
+OpenADMIXTURE.jl.
 
 P gives the frequency of the **alternate** allele of each locus.
 
 ## Validation
 
-Two sets of tests compare `openadmixturer` with the original implementations.
-Neither OpenADMIXTURE.jl nor ADMIXTURE is under active development, so their
-results are computed once, by scripts in `data-raw/`, and stored as fixtures
-in `tests/testthat/fixtures/`; the tests compare with these fixtures, so they
-need neither Julia nor ADMIXTURE.
+The test suite compares `openadmixturer` with the original implementations:
 
-- `tests/testthat/test_julia.R` compares the implementation with
-  OpenADMIXTURE.jl step by step on simulated data with missing genotypes:
-  starting from the same values of Q and P, the log-likelihood, an EM step,
-  the Newton updates of Q and P, and the whole quasi-Newton algorithm
-  (iteration by iteration) agree to numerical precision. The only difference
-  is the documented normalisation of the EM update of Q when genotypes are
-  missing. The fixtures are created by
-  `Rscript data-raw/regenerate_julia_fixtures.R`, which needs Julia with
-  OpenADMIXTURE.jl; these can be installed in a dedicated conda environment
-  with `bash data-raw/setup_julia_env.sh`.
-- `tests/testthat/test_admixture.R` compares the results with ADMIXTURE on
-  the `EUR_subset` data used in the OpenADMIXTURE.jl tests (379 individuals,
+- `tests/testthat/test_julia.R` compares it with OpenADMIXTURE.jl step by
+  step on simulated data with missing genotypes: starting from the same
+  values of Q and P, the log-likelihood, an EM step, the Newton updates of Q
+  and P, and the whole quasi-Newton algorithm (iteration by iteration) agree
+  to numerical precision. The only difference is the documented
+  normalisation of the EM update of Q when genotypes are missing.
+- `tests/testthat/test_admixture.R` compares it with ADMIXTURE on the
+  `EUR_subset` data used in the OpenADMIXTURE.jl tests (379 individuals,
   54,051 SNPs), for K = 2 to 4: log-likelihoods, Q and P agree, and the
-  estimates of ADMIXTURE are a fixed point of `gt_openadmixture()`. The data
-  are downloaded automatically (and checked against the checksums stored
-  with the fixtures), so this test is skipped when offline. The fixtures are
-  created by `Rscript data-raw/regenerate_admixture_fixtures.R`, which needs
-  ADMIXTURE (it can be installed with `Rscript data-raw/setup_admixture.R`,
-  via `tidygenclust`).
+  estimates of ADMIXTURE are a fixed point of `gt_openadmixture()`.
 
-The scripts in `data-raw/` reproduce the timings reported below; run
-`data-raw/download_eur_subset.R` first to download the data. On
-`EUR_subset` with K = 4, `gt_openadmixture()` converges in 23 iterations to
-a log-likelihood of -15,552,194.2, compared with -15,552,193.9 reported by
-OpenADMIXTURE.jl, taking 19 seconds on 4 cores against 153 seconds for
+Neither OpenADMIXTURE.jl nor ADMIXTURE is under active development, so their
+results are stored as fixtures, and the tests need neither Julia nor
+ADMIXTURE. How the fixtures were created, and how to regenerate them, is
+explained in [`data-raw/README.md`](data-raw/README.md).
+
+On `EUR_subset` with K = 4, `gt_openadmixture()` converges in 23 iterations
+to a log-likelihood of -15,552,194.2, compared with -15,552,193.9 reported
+by OpenADMIXTURE.jl, taking 19 seconds on 4 cores against 153 seconds for
 ADMIXTURE.
 
 The vignette (`vignette("openadmixturer")`) compares `gt_openadmixture()`

@@ -14,6 +14,9 @@
 # genotypes and the starting values. P matrices in the fixture have already
 # been converted to frequencies of allele_alt (SnpArrays, used by
 # OpenADMIXTURE.jl, counts the other allele).
+#
+# See data-raw/README.md for how the fixtures were created and how to
+# regenerate them.
 
 fixture_file <- test_path("fixtures", "julia_reference.rds")
 skip_if_not(file.exists(fixture_file), "OpenADMIXTURE.jl fixtures not found")
