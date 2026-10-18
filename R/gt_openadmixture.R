@@ -39,6 +39,33 @@
 #'   `rtol`. All estimates are kept within \[1e-5, 1 - 1e-5\], as in ADMIXTURE
 #'   and OpenADMIXTURE.jl.
 #'
+#'   ## Cross-validation
+#'
+#'   With `crossval = TRUE`, the cross-validation error of ADMIXTURE
+#'   (Alexander and Lange 2011) is computed for each run, and can be used to
+#'   choose `k` (lower is better; see `autoplot(type = "cv")`). The observed
+#'   genotypes are split into `n_folds` folds of roughly equal size; for each
+#'   fold, the model is refitted with the genotypes of that fold treated as
+#'   missing, and each of them is predicted by its expected value
+#'   \eqn{\mu = n \sum_k q_{ik} p_{kj}}{mu = n sum_k q_ik p_kj}, where
+#'   \eqn{n} is the number of allele copies of the individual. The error is
+#'   the binomial deviance
+#'   \deqn{d(g, \mu) = g \log(g / \mu) + (n - g) \log((n - g) / (n - \mu))}{
+#'   d(g, mu) = g log(g / mu) + (n - g) log((n - g) / (n - mu))}
+#'   averaged over all the masked genotypes of all folds. Where ADMIXTURE does
+#'   not document the details, we made the following choices:
+#'   - each fold is fitted starting from the estimates for the full data, with
+#'     the same convergence criteria (`max_iter` and `rtol`);
+#'   - genotypes are assigned to folds by a hash of their position and of a
+#'     seed drawn from the random number generator (reproducible with
+#'     `seed`), so the folds differ from those of ADMIXTURE and the errors
+#'     agree with ADMIXTURE's closely but not exactly;
+#'   - pseudohaploid individuals use \eqn{n = 1}.
+#'
+#'   Cross-validation does not change the estimates of Q and P, but requires
+#'   `n_folds` additional fits for each run (each usually converging in a few
+#'   iterations).
+#'
 #'   ## Comparison with ADMIXTURE
 #'
 #'   The model and the log-likelihood are those of ADMIXTURE (Alexander et al.
@@ -50,10 +77,11 @@
 #'   - ADMIXTURE reports the frequency of the second allele in the PLINK bim
 #'     file, which for a `gen_tibble` is the reference allele, so its P
 #'     matrices are 1 - P of those returned here;
-#'   - cross-validation, bootstrap standard errors and supervised analyses
-#'     with individuals of known ancestry, available in ADMIXTURE, are not
-#'     implemented (a fixed reference panel can be used with `init_p` and
-#'     `fix_p`).
+#'   - cross-validation follows ADMIXTURE (see above), and the test suite
+#'     checks that the errors agree with those of ADMIXTURE on `EUR_subset`;
+#'   - bootstrap standard errors and supervised analyses with individuals of
+#'     known ancestry, available in ADMIXTURE, are not implemented (a fixed
+#'     reference panel can be used with `init_p` and `fix_p`).
 #'
 #'   ## Differences from OpenADMIXTURE.jl
 #'
@@ -61,6 +89,8 @@
 #'   computations of OpenADMIXTURE.jl to numerical precision (this is checked
 #'   by the test suite), except for the following:
 #'   - there is no GPU (CUDA) support;
+#'   - cross-validation, which OpenADMIXTURE.jl does not offer, is available
+#'     (see above);
 #'   - sparse K-means selection of ancestry informative markers (SKFR) is not
 #'     implemented; loci can be selected beforehand with
 #'     [tidypopgen::select_loci()];
@@ -86,6 +116,9 @@
 #'
 #'   Alexander DH, Novembre J, Lange K (2009) Fast model-based estimation of
 #'   ancestry in unrelated individuals. Genome Research, 19(9), 1655-1664.
+#'
+#'   Alexander DH, Lange K (2011) Enhancements to the ADMIXTURE algorithm for
+#'   individual ancestry estimation. BMC Bioinformatics, 12, 246.
 #'
 #'   Zhou H, Alexander D, Lange K (2011) A quasi-Newton acceleration for
 #'   high-dimensional optimization algorithms. Statistics and Computing,
@@ -113,6 +146,10 @@
 #'   value given in `init_q` (respectively `init_p`)
 #' @param use_imputed boolean; if `TRUE`, imputed genotypes are used as if
 #'   they were observed; otherwise they are treated as missing (the default)
+#' @param crossval boolean; should the cross-validation error be computed
+#'   (defaults to `FALSE`)? See the details.
+#' @param n_folds the number of folds used for cross-validation (defaults to
+#'   5, as in ADMIXTURE)
 #' @param n_cores the number of cores to use (defaults to 1)
 #' @param verbose boolean; should progress be printed (defaults to `FALSE`)
 #' @returns an object of class `gt_admix`, a list with elements:
@@ -123,6 +160,7 @@
 #' - `log` a list with the log of each run
 #' - `loglik` the log-likelihood of each run
 #' - `converged` whether each run converged
+#' - `cv` the cross-validation error of each run (if `crossval` is `TRUE`)
 #' - `id` the id column of `x`
 #' - `group` the group column of `x` (if `x` is grouped)
 #' - `algorithm` "OpenADMIXTURE"
@@ -136,10 +174,15 @@
 #' )
 #' adm <- gt_openadmixture(pop_a, k = 2, seed = 1)
 #' adm$Q[[1]]
+#'
+#' # choose k by cross-validation
+#' adm_cv <- gt_openadmixture(pop_a, k = 1:3, seed = 1, crossval = TRUE)
+#' adm_cv$cv
 gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
                              rtol = 1e-7, n_em_iter = 5, n_qn = 3,
                              init_q = NULL, init_p = NULL, fix_q = FALSE,
-                             fix_p = FALSE, use_imputed = FALSE, n_cores = 1,
+                             fix_p = FALSE, use_imputed = FALSE,
+                             crossval = FALSE, n_folds = 5, n_cores = 1,
                              verbose = FALSE) {
   # This function is a thin wrapper: it checks the arguments, prepares the
   # data once, and then calls oadm_fit() (R/oadm_fit.R) for each run,
@@ -185,6 +228,18 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
   if (fix_p && is.null(init_p)) {
     stop("'fix_p = TRUE' requires 'init_p'", call. = FALSE)
   }
+  # cross-validation refits both Q and P for each fold, so it is not
+  # available when one of them is fixed
+  if (!is.logical(crossval) || length(crossval) != 1 || is.na(crossval)) {
+    stop("'crossval' should be TRUE or FALSE", call. = FALSE)
+  }
+  if (crossval && (fix_q || fix_p)) {
+    stop("'crossval' cannot be used with 'fix_q' or 'fix_p'", call. = FALSE)
+  }
+  n_folds <- suppressWarnings(as.integer(n_folds))
+  if (length(n_folds) != 1 || is.na(n_folds) || n_folds < 2) {
+    stop("'n_folds' should be an integer of at least 2", call. = FALSE)
+  }
 
   # Prepare the data: indices into the backing file, decoding table and
   # ploidy of each individual (R/oadm_data.R). This is done once and shared
@@ -221,6 +276,7 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
     k = integer(0), Q = list(), P = list(), log = list(),
     loglik = numeric(0), converged = logical(0)
   )
+  if (crossval) adm_list$cv <- numeric(0)
   index <- 1
   for (this_k in k) {
     for (this_rep in seq_len(n_runs)) {
@@ -247,6 +303,20 @@ gt_openadmixture <- function(x, k, n_runs = 1, seed = NULL, max_iter = 1000,
       adm_list$log[[index]] <- fit$log
       adm_list$loglik[index] <- fit$loglik
       adm_list$converged[index] <- fit$converged
+      if (crossval) {
+        # The folds of each run get their own seed, drawn from R's random
+        # number generator after the main fit (so that the main fit, and
+        # hence Q and P, are the same with or without cross-validation), and
+        # therefore reproducible with `seed`
+        cv_seed <- floor(stats::runif(1) * 2^31)
+        cv_res <- oadm_cv(data,
+          fit = fit, k = this_k, n_folds = n_folds, cv_seed = cv_seed,
+          max_iter = max_iter, rtol = rtol, n_qn = n_qn, n_cores = n_cores
+        )
+        adm_list$cv[index] <- cv_res$cv
+        adm_list$log[[index]] <- c(fit$log, cv_res$log)
+        if (verbose) message(utils::tail(cv_res$log, 1))
+      }
       index <- index + 1
     }
   }

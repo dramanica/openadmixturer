@@ -23,6 +23,7 @@ Imports:
     stats,
     Rcpp,
     tidypopgen,
+    utils,
     vctrs
 LinkingTo:
     bigstatsr,

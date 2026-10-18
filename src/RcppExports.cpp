@@ -12,8 +12,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // oadm_decode_cpp
-NumericMatrix oadm_decode_cpp(Environment BM, const IntegerVector& rowInd, const IntegerVector& colInd, const NumericVector& lut, const NumericVector& n_trials, const NumericVector& scale);
-RcppExport SEXP _openadmixturer_oadm_decode_cpp(SEXP BMSEXP, SEXP rowIndSEXP, SEXP colIndSEXP, SEXP lutSEXP, SEXP n_trialsSEXP, SEXP scaleSEXP) {
+NumericMatrix oadm_decode_cpp(Environment BM, const IntegerVector& rowInd, const IntegerVector& colInd, const NumericVector& lut, const NumericVector& n_trials, const NumericVector& scale, int cv_mode, int cv_fold, int n_folds, double cv_seed);
+RcppExport SEXP _openadmixturer_oadm_decode_cpp(SEXP BMSEXP, SEXP rowIndSEXP, SEXP colIndSEXP, SEXP lutSEXP, SEXP n_trialsSEXP, SEXP scaleSEXP, SEXP cv_modeSEXP, SEXP cv_foldSEXP, SEXP n_foldsSEXP, SEXP cv_seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -23,13 +23,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const NumericVector& >::type lut(lutSEXP);
     Rcpp::traits::input_parameter< const NumericVector& >::type n_trials(n_trialsSEXP);
     Rcpp::traits::input_parameter< const NumericVector& >::type scale(scaleSEXP);
-    rcpp_result_gen = Rcpp::wrap(oadm_decode_cpp(BM, rowInd, colInd, lut, n_trials, scale));
+    Rcpp::traits::input_parameter< int >::type cv_mode(cv_modeSEXP);
+    Rcpp::traits::input_parameter< int >::type cv_fold(cv_foldSEXP);
+    Rcpp::traits::input_parameter< int >::type n_folds(n_foldsSEXP);
+    Rcpp::traits::input_parameter< double >::type cv_seed(cv_seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_decode_cpp(BM, rowInd, colInd, lut, n_trials, scale, cv_mode, cv_fold, n_folds, cv_seed));
     return rcpp_result_gen;
 END_RCPP
 }
 // oadm_geno_ptr
-SEXP oadm_geno_ptr(Environment BM, IntegerVector rowInd, IntegerVector colInd, NumericVector lut, NumericVector n_trials, NumericVector scale);
-RcppExport SEXP _openadmixturer_oadm_geno_ptr(SEXP BMSEXP, SEXP rowIndSEXP, SEXP colIndSEXP, SEXP lutSEXP, SEXP n_trialsSEXP, SEXP scaleSEXP) {
+SEXP oadm_geno_ptr(Environment BM, IntegerVector rowInd, IntegerVector colInd, NumericVector lut, NumericVector n_trials, NumericVector scale, int cv_mode, int cv_fold, int n_folds, double cv_seed);
+RcppExport SEXP _openadmixturer_oadm_geno_ptr(SEXP BMSEXP, SEXP rowIndSEXP, SEXP colIndSEXP, SEXP lutSEXP, SEXP n_trialsSEXP, SEXP scaleSEXP, SEXP cv_modeSEXP, SEXP cv_foldSEXP, SEXP n_foldsSEXP, SEXP cv_seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -39,7 +43,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type lut(lutSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type n_trials(n_trialsSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type scale(scaleSEXP);
-    rcpp_result_gen = Rcpp::wrap(oadm_geno_ptr(BM, rowInd, colInd, lut, n_trials, scale));
+    Rcpp::traits::input_parameter< int >::type cv_mode(cv_modeSEXP);
+    Rcpp::traits::input_parameter< int >::type cv_fold(cv_foldSEXP);
+    Rcpp::traits::input_parameter< int >::type n_folds(n_foldsSEXP);
+    Rcpp::traits::input_parameter< double >::type cv_seed(cv_seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_geno_ptr(BM, rowInd, colInd, lut, n_trials, scale, cv_mode, cv_fold, n_folds, cv_seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -54,6 +62,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericMatrix >::type p(pSEXP);
     Rcpp::traits::input_parameter< int >::type n_cores(n_coresSEXP);
     rcpp_result_gen = Rcpp::wrap(oadm_loglik_cpp(geno_ptr, q, p, n_cores));
+    return rcpp_result_gen;
+END_RCPP
+}
+// oadm_deviance_cpp
+NumericVector oadm_deviance_cpp(SEXP geno_ptr, NumericMatrix q, NumericMatrix p, int n_cores);
+RcppExport SEXP _openadmixturer_oadm_deviance_cpp(SEXP geno_ptrSEXP, SEXP qSEXP, SEXP pSEXP, SEXP n_coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type geno_ptr(geno_ptrSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type q(qSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type n_cores(n_coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(oadm_deviance_cpp(geno_ptr, q, p, n_cores));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -165,9 +187,10 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 6},
-    {"_openadmixturer_oadm_geno_ptr", (DL_FUNC) &_openadmixturer_oadm_geno_ptr, 6},
+    {"_openadmixturer_oadm_decode_cpp", (DL_FUNC) &_openadmixturer_oadm_decode_cpp, 10},
+    {"_openadmixturer_oadm_geno_ptr", (DL_FUNC) &_openadmixturer_oadm_geno_ptr, 10},
     {"_openadmixturer_oadm_loglik_cpp", (DL_FUNC) &_openadmixturer_oadm_loglik_cpp, 4},
+    {"_openadmixturer_oadm_deviance_cpp", (DL_FUNC) &_openadmixturer_oadm_deviance_cpp, 4},
     {"_openadmixturer_oadm_em_cpp", (DL_FUNC) &_openadmixturer_oadm_em_cpp, 4},
     {"_openadmixturer_oadm_grad_q_cpp", (DL_FUNC) &_openadmixturer_oadm_grad_q_cpp, 4},
     {"_openadmixturer_oadm_grad_p_cpp", (DL_FUNC) &_openadmixturer_oadm_grad_p_cpp, 4},

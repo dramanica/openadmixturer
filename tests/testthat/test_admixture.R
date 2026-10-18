@@ -9,6 +9,8 @@
 # - the log-likelihoods agree;
 # - the ancestry proportions (Q) and allele frequencies (P) agree, once the
 #   clusters are matched (their labels are arbitrary);
+# - the cross-validation errors agree, and rank the values of K in the same
+#   order;
 # - the estimates of ADMIXTURE are a fixed point of our algorithm: started
 #   from them, gt_openadmixture() converges immediately without improving
 #   the likelihood, i.e. both programs agree on where the maximum is.
@@ -53,6 +55,8 @@ test_that("the data are those used to create the ADMIXTURE fixtures", {
 })
 
 dat <- oadm_attach(oadm_prepare(eur))
+# cross-validation errors of each K, collected in the loop below
+oa_cv <- numeric(0)
 
 for (run in fixture$runs) {
   k <- run$k
@@ -72,7 +76,11 @@ for (run in fixture$runs) {
     )
   })
 
-  oa <- gt_openadmixture(eur, k = k, seed = 1, n_cores = n_cores)
+  oa <- gt_openadmixture(eur,
+    k = k, seed = 1, n_cores = n_cores,
+    crossval = TRUE
+  )
+  oa_cv <- c(oa_cv, oa$cv)
   q_oa <- unclass(oa$Q[[1]])
   perm <- match_clusters_perm(q_oa, q_adm)
   q_oa <- q_oa[, perm]
@@ -89,6 +97,14 @@ for (run in fixture$runs) {
     expect_gt(stats::cor(as.vector(q_oa), as.vector(q_adm)), 0.999)
     expect_lt(mean(abs(p_oa - p_adm)), 0.005)
     expect_gt(stats::cor(as.vector(p_oa), as.vector(p_adm)), 0.999)
+  })
+
+  test_that(paste("cross-validation errors agree with ADMIXTURE, K =", k), {
+    # both programs mask 5 random folds of the observed genotypes and report
+    # the mean binomial deviance of the masked genotypes, but their folds
+    # differ (and ADMIXTURE prints 5 decimal places), so the errors agree
+    # closely rather than exactly
+    expect_equal(oa$cv, run$cv, tolerance = 1e-3)
   })
 
   test_that(paste("ADMIXTURE's estimates are our fixed point, K =", k), {
@@ -109,3 +125,8 @@ for (run in fixture$runs) {
     expect_lt(max(abs(unclass(warm$Q[[1]]) - init_q)), 0.01)
   })
 }
+
+test_that("cross-validation ranks K as ADMIXTURE does", {
+  adm_cv <- vapply(fixture$runs, function(run) run$cv, numeric(1))
+  expect_identical(order(oa_cv), order(adm_cv))
+})

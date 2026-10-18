@@ -68,8 +68,9 @@ Used by `tests/testthat/test_admixture.R`. It holds the estimates of
 ADMIXTURE 1.3.0 (seed 1) for K = 2 to 4 on the `EUR_subset` data of
 SnpArrays.jl (379 individuals, 54,051 SNPs), the data used in the
 OpenADMIXTURE.jl tests: Q and P (stored exactly, as integers in millionths,
-since ADMIXTURE writes 6 decimal places), the log-likelihood and the log of
-each run, together with MD5 checksums of the data files. The data
+since ADMIXTURE writes 6 decimal places), the log-likelihood, the 5-fold
+cross-validation error (`--cv`) and the log of each run, together with MD5
+checksums of the data files. The data
 themselves are not stored: the test downloads them (and checks the
 checksums), so it is skipped when offline.
 
@@ -89,11 +90,17 @@ To regenerate it:
    Rscript data-raw/download_eur_subset.R
    ```
 
-3. Run ADMIXTURE and save the results (this takes several minutes):
+3. Run ADMIXTURE and save the results (this takes about 30-40 minutes,
+   mostly because of the cross-validation):
 
    ```bash
    Rscript data-raw/regenerate_admixture_fixtures.R
    ```
+
+ADMIXTURE's folds are random and cannot be reproduced (its source code is
+not available), so the test only expects the cross-validation errors of
+`openadmixturer` to agree closely with ADMIXTURE's, and to rank K the same
+way.
 
 ADMIXTURE reports the frequency of the second allele of the bim file
 (`allele_ref`), so the test compares 1 - P with the P matrices of

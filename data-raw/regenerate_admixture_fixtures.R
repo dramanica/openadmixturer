@@ -10,7 +10,8 @@
 # Rscript data-raw/setup_admixture.R, and the EUR_subset data, downloaded
 # with Rscript data-raw/download_eur_subset.R.
 #
-# Run from the root of the package:
+# Run from the root of the package (this takes about 30-40 minutes, mostly
+# because of the cross-validation):
 #   Rscript data-raw/regenerate_admixture_fixtures.R
 
 k_values <- 2:4
@@ -34,6 +35,10 @@ runs <- lapply(k_values, function(k) {
   message("Running ADMIXTURE with K = ", k)
   adm <- tidypopgen::gt_admixture(eur,
     k = k, seed = seed, n_cores = n_cores,
+    # ADMIXTURE's 5-fold cross-validation; this does not change the
+    # estimates (Q, P and log-likelihood of the full data), but makes each
+    # run take several times longer
+    crossval = TRUE,
     conda_env = conda_env
   )
   # ADMIXTURE writes its estimates with 6 decimal places, so we can store
@@ -41,6 +46,7 @@ runs <- lapply(k_values, function(k) {
   list(
     k = k,
     loglik = adm$loglik,
+    cv = adm$cv,
     q_millionths = matrix(
       as.integer(round(as.matrix(adm$Q[[1]]) * 1e6)),
       ncol = k
@@ -57,7 +63,8 @@ version_line <- grep("ADMIXTURE Version", runs[[1]]$log, value = TRUE)
 fixture <- list(
   description = paste(
     "ADMIXTURE estimates for the EUR_subset data of SnpArrays.jl, used by",
-    "tests/testthat/test_admixture.R. Q and P are stored in millionths;",
+    "tests/testthat/test_admixture.R, including the 5-fold cross-validation",
+    "error (cv) of each run. Q and P are stored in millionths;",
     "P is the frequency of the second allele of the bim file (allele_ref",
     "for a gen_tibble), with loci in the order of the bim file."
   ),

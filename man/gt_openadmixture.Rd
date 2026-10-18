@@ -18,6 +18,8 @@ gt_openadmixture(
   fix_q = FALSE,
   fix_p = FALSE,
   use_imputed = FALSE,
+  crossval = FALSE,
+  n_folds = 5,
   n_cores = 1,
   verbose = FALSE
 )
@@ -57,6 +59,12 @@ value given in \code{init_q} (respectively \code{init_p})}
 \item{use_imputed}{boolean; if \code{TRUE}, imputed genotypes are used as if
 they were observed; otherwise they are treated as missing (the default)}
 
+\item{crossval}{boolean; should the cross-validation error be computed
+(defaults to \code{FALSE})? See the details.}
+
+\item{n_folds}{the number of folds used for cross-validation (defaults to
+5, as in ADMIXTURE)}
+
 \item{n_cores}{the number of cores to use (defaults to 1)}
 
 \item{verbose}{boolean; should progress be printed (defaults to \code{FALSE})}
@@ -71,6 +79,7 @@ proportions
 \item \code{log} a list with the log of each run
 \item \code{loglik} the log-likelihood of each run
 \item \code{converged} whether each run converged
+\item \code{cv} the cross-validation error of each run (if \code{crossval} is \code{TRUE})
 \item \code{id} the id column of \code{x}
 \item \code{group} the group column of \code{x} (if \code{x} is grouped)
 \item \code{algorithm} "OpenADMIXTURE"
@@ -119,6 +128,36 @@ Iterations stop when the relative change in log-likelihood falls below
 and OpenADMIXTURE.jl.
 }
 
+\subsection{Cross-validation}{
+
+With \code{crossval = TRUE}, the cross-validation error of ADMIXTURE
+(Alexander and Lange 2011) is computed for each run, and can be used to
+choose \code{k} (lower is better; see \code{autoplot(type = "cv")}). The observed
+genotypes are split into \code{n_folds} folds of roughly equal size; for each
+fold, the model is refitted with the genotypes of that fold treated as
+missing, and each of them is predicted by its expected value
+\eqn{\mu = n \sum_k q_{ik} p_{kj}}{mu = n sum_k q_ik p_kj}, where
+\eqn{n} is the number of allele copies of the individual. The error is
+the binomial deviance
+\deqn{d(g, \mu) = g \log(g / \mu) + (n - g) \log((n - g) / (n - \mu))}{
+  d(g, mu) = g log(g / mu) + (n - g) log((n - g) / (n - mu))}
+averaged over all the masked genotypes of all folds. Where ADMIXTURE does
+not document the details, we made the following choices:
+\itemize{
+\item each fold is fitted starting from the estimates for the full data, with
+the same convergence criteria (\code{max_iter} and \code{rtol});
+\item genotypes are assigned to folds by a hash of their position and of a
+seed drawn from the random number generator (reproducible with
+\code{seed}), so the folds differ from those of ADMIXTURE and the errors
+agree with ADMIXTURE's closely but not exactly;
+\item pseudohaploid individuals use \eqn{n = 1}.
+}
+
+Cross-validation does not change the estimates of Q and P, but requires
+\code{n_folds} additional fits for each run (each usually converging in a few
+iterations).
+}
+
 \subsection{Comparison with ADMIXTURE}{
 
 The model and the log-likelihood are those of ADMIXTURE (Alexander et al.
@@ -131,10 +170,11 @@ data used in the OpenADMIXTURE.jl tests. Note that:
 \item ADMIXTURE reports the frequency of the second allele in the PLINK bim
 file, which for a \code{gen_tibble} is the reference allele, so its P
 matrices are 1 - P of those returned here;
-\item cross-validation, bootstrap standard errors and supervised analyses
-with individuals of known ancestry, available in ADMIXTURE, are not
-implemented (a fixed reference panel can be used with \code{init_p} and
-\code{fix_p}).
+\item cross-validation follows ADMIXTURE (see above), and the test suite
+checks that the errors agree with those of ADMIXTURE on \code{EUR_subset};
+\item bootstrap standard errors and supervised analyses with individuals of
+known ancestry, available in ADMIXTURE, are not implemented (a fixed
+reference panel can be used with \code{init_p} and \code{fix_p}).
 }
 }
 
@@ -145,6 +185,8 @@ computations of OpenADMIXTURE.jl to numerical precision (this is checked
 by the test suite), except for the following:
 \itemize{
 \item there is no GPU (CUDA) support;
+\item cross-validation, which OpenADMIXTURE.jl does not offer, is available
+(see above);
 \item sparse K-means selection of ancestry informative markers (SKFR) is not
 implemented; loci can be selected beforehand with
 \code{\link[tidypopgen:select_loci]{tidypopgen::select_loci()}};
@@ -174,6 +216,10 @@ pop_a <- tidypopgen::gen_tibble(bed_file,
 )
 adm <- gt_openadmixture(pop_a, k = 2, seed = 1)
 adm$Q[[1]]
+
+# choose k by cross-validation
+adm_cv <- gt_openadmixture(pop_a, k = 1:3, seed = 1, crossval = TRUE)
+adm_cv$cv
 }
 \references{
 Ko S, Chu BB, Peterson D, Okenwa C, Papp JC, Alexander DH,
@@ -183,6 +229,9 @@ datasets. The American Journal of Human Genetics, 110(2), 314-325.
 
 Alexander DH, Novembre J, Lange K (2009) Fast model-based estimation of
 ancestry in unrelated individuals. Genome Research, 19(9), 1655-1664.
+
+Alexander DH, Lange K (2011) Enhancements to the ADMIXTURE algorithm for
+individual ancestry estimation. BMC Bioinformatics, 12, 246.
 
 Zhou H, Alexander D, Lange K (2011) A quasi-Newton acceleration for
 high-dimensional optimization algorithms. Statistics and Computing,

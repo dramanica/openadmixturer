@@ -33,7 +33,8 @@ lobsters <- gen_tibble(bed_file, backingfile = tempfile("lobsters"),
 lobsters <- lobsters %>% group_by(population)
 
 adm <- gt_openadmixture(lobsters, k = 2:4, n_runs = 2, seed = c(1, 2),
-                        n_cores = 4)
+                        crossval = TRUE, n_cores = 4)
+autoplot(adm, type = "cv")
 autoplot(adm, type = "barplot", k = 3, run = 1)
 ```
 
@@ -47,6 +48,9 @@ As in OpenADMIXTURE.jl:
    program with K. Lange's sweep-operator active-set method;
 3. quasi-Newton acceleration (Zhou, Alexander and Lange 2011) using the last
    three secant pairs, accepted only when it improves the log-likelihood.
+
+Optionally, the cross-validation error of ADMIXTURE can be computed to help
+choose K (`crossval = TRUE`).
 
 The model and the log-likelihood are those of ADMIXTURE, so both programs
 reach the same estimates. See the details section of `?gt_openadmixture`

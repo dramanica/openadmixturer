@@ -566,6 +566,74 @@ double oadm_loglik(const GenoView& geno, const double* q, const double* p,
   return ll;
 }
 
+// Binomial deviance of the genotypes visible in the view, for the
+// cross-validation error of ADMIXTURE (Alexander & Lange 2011).
+//
+// For a held-out genotype g of an individual with n allele copies, the model
+// fitted without it predicts mu = n qp (the expected number of alt alleles),
+// and the prediction error is measured by the binomial deviance
+//   d(g, mu) = g log(g / mu) + (n - g) log((n - g) / (n - mu))
+//            = g log(g / (n qp)) + h log(h / (n (1 - qp))),   h = n - g,
+// with the convention 0 log 0 = 0. This is the formula given in the ADMIXTURE
+// paper and manual for diploids (n = 2), where it is (half) the squared
+// deviance residual of the binomial model; using n_i instead of 2 extends it
+// to pseudohaploids in the natural way (a deviation from ADMIXTURE, which
+// only handles diploids). d is 0 when the prediction is perfect and grows as
+// mu moves away from g.
+//
+// Called with a held-out view (CV_HELD_OUT in geno_access.h), only the
+// genotypes of the scored fold are visible; all the others look missing and
+// contribute nothing. Writes the total deviance to *dev and the number of
+// visible genotypes to *count, so that the cross-validation error can be
+// pooled over folds as sum(dev) / sum(count), i.e. averaged over all held-out
+// genotypes, as ADMIXTURE does.
+//
+// Same structure as oadm_loglik(): blocks of loci in parallel, one partial
+// sum per block added up serially, so the result does not depend on the
+// number of threads.
+void oadm_deviance(const GenoView& geno, const double* q, const double* p,
+                   int K, int n_cores, double* dev, double* count) {
+  const size_t I = geno.nrow(), J = geno.ncol();
+  std::vector<double> qT = transpose(q, K, I);
+  const ptrdiff_t nb = n_blocks(J, TILE_J);
+  std::vector<double> partial_dev(nb, 0.0), partial_n(nb, 0.0);
+#pragma omp parallel num_threads(n_cores)
+{
+  Slice s;
+#pragma omp for schedule(dynamic)
+  for (ptrdiff_t bl = 0; bl < nb; bl++) {
+    const size_t j1 = std::min(J, (bl + 1) * TILE_J);
+    double d = 0.0, n_obs = 0.0;
+    for (size_t j = bl * TILE_J; j < j1; j++) {
+      for (size_t i0 = 0; i0 < I; i0 += TILE_I) {
+        const size_t i1 = std::min(I, i0 + TILE_I);
+        // qp and genotypes; hidden and missing genotypes have g = h = 0
+        slice_geno(geno, qT.data(), p + K * j, K, j, i0, i1, s);
+        for (size_t ii = 0; ii < i1 - i0; ii++) {
+          const double g = s.g[ii], h = s.h[ii], qp = s.qp[ii];
+          // a visible genotype always has g + h = n_i > 0
+          if (g + h <= 0) continue;
+          const double n = g + h;
+          // skip zero coefficients (0 log 0 = 0); the estimates are kept in
+          // [1e-5, 1 - 1e-5], so qp is never exactly 0 or 1 here
+          if (g > 0) d += g * std::log(g / (n * qp));
+          if (h > 0) d += h * std::log(h / (n * (1.0 - qp)));
+          n_obs += 1.0;
+        }
+      }
+    }
+    partial_dev[bl] = d;
+    partial_n[bl] = n_obs;
+  }
+}
+  *dev = 0.0;
+  *count = 0.0;
+  for (ptrdiff_t bl = 0; bl < nb; bl++) {
+    *dev += partial_dev[bl];
+    *count += partial_n[bl];
+  }
+}
+
 // Two passes from the same (q, p): a Q-side pass over blocks of individuals
 // and a P-side pass over blocks of loci. This reads the genotypes twice but
 // keeps both passes free of reductions.
@@ -831,12 +899,24 @@ static SEXP geno_tag() {
 // and hence the mapping that GenoView reads through a raw pointer. The
 // second argument, true, registers a finaliser that deletes the GenoView
 // when the pointer is garbage collected.)
+//
+// cv_mode, cv_fold, n_folds and cv_seed set the cross-validation mask (see
+// geno_access.h): mode 0 gives a plain view, mode 1 hides fold cv_fold (to
+// fit it) and mode 2 shows only fold cv_fold (to score it); cv_fold is
+// 1-based, as in R. The seed is passed from R as a double holding an integer
+// (R has no 64-bit integers), which is enough to give each run its own
+// folds.
 // [[Rcpp::export]]
 SEXP oadm_geno_ptr(Environment BM, IntegerVector rowInd, IntegerVector colInd,
                    NumericVector lut, NumericVector n_trials,
-                   NumericVector scale) {
+                   NumericVector scale, int cv_mode = 0, int cv_fold = 1,
+                   int n_folds = 1, double cv_seed = 0) {
+  if (cv_seed < 0 || cv_seed != std::floor(cv_seed))
+    stop("'cv_seed' must be a non-negative integer.");
   // the constructor validates its arguments and may throw (Rcpp::stop)
-  GenoView* geno = new GenoView(BM, rowInd, colInd, lut, n_trials, scale);
+  GenoView* geno = new GenoView(BM, rowInd, colInd, lut, n_trials, scale,
+                                cv_mode, cv_fold - 1, n_folds,
+                                (uint64_t) cv_seed);
   XPtr<GenoView> ptr(geno, true, geno_tag(), BM);
   return ptr;
 }
@@ -880,6 +960,18 @@ double oadm_loglik_cpp(SEXP geno_ptr, NumericMatrix q, NumericMatrix p,
   const GenoView& geno = get_geno(geno_ptr);
   const int K = check_dims(geno, q, p, n_cores);
   return oadm_loglik(geno, q.begin(), p.begin(), K, n_cores);
+}
+
+// Binomial deviance of the visible genotypes, for cross-validation; returns
+// c(deviance, count) (see oadm_deviance()).
+// [[Rcpp::export]]
+NumericVector oadm_deviance_cpp(SEXP geno_ptr, NumericMatrix q,
+                                NumericMatrix p, int n_cores) {
+  const GenoView& geno = get_geno(geno_ptr);
+  const int K = check_dims(geno, q, p, n_cores);
+  double dev, count;
+  oadm_deviance(geno, q.begin(), p.begin(), K, n_cores, &dev, &count);
+  return NumericVector::create(dev, count);
 }
 
 // One EM step; returns list(q = K x I, p = K x J).

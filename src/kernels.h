@@ -72,4 +72,11 @@ void oadm_update_q(const GenoView& geno, const double* q, const double* p,
 void oadm_update_p(const GenoView& geno, const double* q, const double* p,
                    int K, double* p_new, int n_cores);
 
+// binomial deviance of the visible genotypes (*dev) and their number
+// (*count), for ADMIXTURE-style cross-validation with a held-out view (see
+// geno_access.h); no Julia counterpart (OpenADMIXTURE.jl has no
+// cross-validation)
+void oadm_deviance(const GenoView& geno, const double* q, const double* p,
+                   int K, int n_cores, double* dev, double* count);
+
 #endif

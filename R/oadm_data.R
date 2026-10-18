@@ -87,13 +87,49 @@ oadm_prepare <- function(x, use_imputed = FALSE) {
 #'
 #' Mostly useful for testing.
 #' @param data the output of `oadm_prepare()`
-#' @returns a numeric matrix (individuals x loci), `NA` for missing values
+#' @param cv an optional cross-validation mask, see `oadm_cv_mask()`
+#' @returns a numeric matrix (individuals x loci), `NA` for missing (or
+#'   masked) values
 #' @keywords internal
 #' @noRd
-oadm_decode <- function(data) {
+oadm_decode <- function(data, cv = NULL) {
+  cv <- oadm_cv_mask(cv)
   oadm_decode_cpp(
     data$fbm, data$rows, data$cols, data$lut,
-    data$n_trials, data$scale
+    data$n_trials, data$scale,
+    cv$mode, cv$fold, cv$n_folds, cv$seed
+  )
+}
+
+#' Cross-validation mask of a genotype view
+#'
+#' A view of the genotypes can hide one fold of the observed genotypes (to
+#' fit the model without them, `mode = "train"`) or show only that fold (to
+#' score the predictions of that model, `mode = "held_out"`). Which fold each
+#' genotype belongs to is computed in C++ from a hash of `seed` and the
+#' position of the genotype (see src/geno_access.h), so the same seed always
+#' gives the same folds.
+#' @param cv `NULL` (no mask) or a list with elements `mode` ("train" or
+#'   "held_out"), `fold` (1 to `n_folds`), `n_folds` and `seed` (a
+#'   non-negative integer, stored as a double)
+#' @returns a list with the integer `mode` (0 = none, 1 = train,
+#'   2 = held out) and the other elements, as expected by the C++ functions
+#' @keywords internal
+#' @noRd
+oadm_cv_mask <- function(cv = NULL) {
+  if (is.null(cv)) {
+    return(list(mode = 0L, fold = 1L, n_folds = 1L, seed = 0))
+  }
+  seed_ok <- length(cv$seed) == 1 && is.finite(cv$seed) && cv$seed >= 0 &&
+    cv$seed == floor(cv$seed)
+  if (!seed_ok) {
+    stop("'cv_seed' must be a non-negative integer", call. = FALSE)
+  }
+  list(
+    mode = match(cv$mode, c("train", "held_out")),
+    fold = as.integer(cv$fold),
+    n_folds = as.integer(cv$n_folds),
+    seed = as.numeric(cv$seed)
   )
 }
 
@@ -102,16 +138,19 @@ oadm_decode <- function(data) {
 #' The accessor is built once and reused by every kernel call. It keeps the
 #' FBM alive, but it does not survive saving and reloading the R session.
 #' @param data the output of `oadm_prepare()`
+#' @param cv an optional cross-validation mask, see `oadm_cv_mask()`
 #' @returns an external pointer
 #' @keywords internal
 #' @noRd
-oadm_geno <- function(data) {
+oadm_geno <- function(data, cv = NULL) {
+  cv <- oadm_cv_mask(cv)
   # The pointer wraps a C++ GenoView (src/geno_access.h), which holds the
   # memory-mapped backing file and the decoding tables. Building it once
   # avoids re-checking and copying the indices at every kernel call (there
   # are several kernel calls per iteration).
   oadm_geno_ptr(
     data$fbm, data$rows, data$cols, data$lut,
-    data$n_trials, data$scale
+    data$n_trials, data$scale,
+    cv$mode, cv$fold, cv$n_folds, cv$seed
   )
 }

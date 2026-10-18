@@ -8,14 +8,19 @@ using namespace Rcpp;
 // genotype on the fly from the memory-mapped file, so the memory used does
 // not grow with the size of the dataset. Loci are the outer loop because the
 // FBM is column-major (consecutive individuals of a locus are contiguous).
+// The cross-validation arguments are as for oadm_geno_ptr() (cv_fold is
+// 1-based), so that the tests can check which genotypes each fold hides.
 // [[Rcpp::export]]
 NumericMatrix oadm_decode_cpp(Environment BM,
                               const IntegerVector& rowInd,
                               const IntegerVector& colInd,
                               const NumericVector& lut,
                               const NumericVector& n_trials,
-                              const NumericVector& scale) {
-  GenoView geno(BM, rowInd, colInd, lut, n_trials, scale);
+                              const NumericVector& scale,
+                              int cv_mode = 0, int cv_fold = 1,
+                              int n_folds = 1, double cv_seed = 0) {
+  GenoView geno(BM, rowInd, colInd, lut, n_trials, scale, cv_mode,
+                cv_fold - 1, n_folds, (uint64_t) cv_seed);
   size_t n = geno.nrow(), m = geno.ncol();
   NumericMatrix out(n, m);
   double g;

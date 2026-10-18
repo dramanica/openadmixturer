@@ -35,10 +35,41 @@
 //
 // The view is immutable after construction and therefore safe to share
 // between OpenMP threads. Do not call any R API from inside parallel regions.
+//
+// Cross-validation masks
+// ----------------------
+// ADMIXTURE's cross-validation (Alexander & Lange 2011) splits the observed
+// genotypes into v folds, refits the model with one fold masked (treated as
+// missing), and measures how well the refitted model predicts the masked
+// genotypes. A view can be built in one of three modes:
+//   CV_NONE     all observed genotypes are visible (normal fitting);
+//   CV_TRAIN    the genotypes of fold `cv_fold` are hidden (fitting a fold);
+//   CV_HELD_OUT only the genotypes of fold `cv_fold` are visible (scoring the
+//               predictions of a fold).
+// Because every kernel reads genotypes through get(), a training view makes
+// all of them (log-likelihood, EM, gradients, Newton updates) ignore the
+// masked genotypes, exactly as if they were missing, with no change to the
+// kernels themselves.
+//
+// Which fold a genotype belongs to is not stored: it is computed on the fly
+// from a hash of (seed, i, j). This needs no memory (a stored fold matrix
+// would be as large as the selected genotypes), is thread safe, and gives
+// the same folds for the same seed. Each genotype is assigned to fold
+// hash mod v, so folds are of roughly (not exactly) equal size, as in
+// ADMIXTURE's description ("roughly equally sized"); genotypes that are
+// already missing are never assigned to a fold, because get() rejects them
+// first. Deviation from ADMIXTURE: ADMIXTURE draws a random partition with
+// its own random number generator (its source code is not available), so
+// our folds, and hence CV errors, cannot be identical to ADMIXTURE's, only
+// statistically equivalent.
 
 #include <bigstatsr/BMAcc.h>
 #include <cmath>
+#include <cstdint>
 #include <vector>
+
+// cross-validation modes (see above)
+enum CvMode { CV_NONE = 0, CV_TRAIN = 1, CV_HELD_OUT = 2 };
 
 class GenoView {
 public:
@@ -48,6 +79,8 @@ public:
   //   not need to be sorted).
   // lut: 256 values, the decoded dosage of each byte (NaN for missing).
   // n_trials, scale: one value per selected individual (see above).
+  // cv_mode, cv_fold, n_folds, cv_seed: the cross-validation mask (see
+  //   above); cv_fold is 0-based. The defaults give a plain view.
   // All checks happen here, in the constructor, which is always called from
   // R (single threaded), so that Rcpp::stop() can safely be used.
   GenoView(Rcpp::Environment BM,
@@ -55,7 +88,9 @@ public:
            const Rcpp::IntegerVector& col_ind,
            const Rcpp::NumericVector& lut,
            const Rcpp::NumericVector& n_trials,
-           const Rcpp::NumericVector& scale) {
+           const Rcpp::NumericVector& scale,
+           int cv_mode = CV_NONE, int cv_fold = 0, int n_folds = 1,
+           uint64_t cv_seed = 0) {
     // the "address" field of the FBM holds an external pointer to the
     // read-only memory mapping of the backing file
     Rcpp::XPtr<FBM> xpBM = BM["address"];
@@ -88,6 +123,16 @@ public:
     // read from any thread
     _n.assign(n_trials.begin(), n_trials.end());
     _scale.assign(scale.begin(), scale.end());
+    // cross-validation mask
+    if (cv_mode != CV_NONE && cv_mode != CV_TRAIN && cv_mode != CV_HELD_OUT)
+      Rcpp::stop("'cv_mode' must be 0 (none), 1 (train) or 2 (held out).");
+    if (cv_mode != CV_NONE && (n_folds < 2 || cv_fold < 0 || cv_fold >= n_folds))
+      Rcpp::stop("'cv_fold' must be between 0 and 'n_folds' - 1, with "
+                 "'n_folds' >= 2.");
+    _cv_mode = cv_mode;
+    _cv_fold = (uint64_t) cv_fold;
+    _n_folds = (uint64_t) (n_folds > 0 ? n_folds : 1);
+    _cv_seed = cv_seed;
   }
 
   // number of selected individuals (I) and loci (J)
@@ -104,8 +149,30 @@ public:
   inline bool get(size_t i, size_t j, double& g) const {
     unsigned char b = _pMat[_rows[i] + _col_off[j]];
     if (_missing[b]) return false;
+    // cross-validation: hide the genotypes of the masked fold (training
+    // view) or all the others (held-out view). For plain views this is a
+    // single, perfectly predictable branch.
+    if (_cv_mode != CV_NONE) {
+      const bool in_fold = fold(i, j) == _cv_fold;
+      if (in_fold == (_cv_mode == CV_TRAIN)) return false;
+    }
     g = _lut[b] * _scale[i];
     return true;
+  }
+
+  // Fold (0 to n_folds - 1) of genotype (i, j), where i and j index the
+  // selected individuals and loci (so folds follow the gen_tibble, not the
+  // layout of the backing file). The splitmix64 finaliser turns the
+  // combination of seed, i and j into a well mixed 64-bit value: consecutive
+  // genotypes get unrelated folds, so folds are spread evenly across
+  // individuals and loci.
+  inline uint64_t fold(size_t i, size_t j) const {
+    uint64_t z = _cv_seed + 0x9E3779B97F4A7C15ULL * ((uint64_t) i + 1) +
+      0xC2B2AE3D27D4EB4FULL * ((uint64_t) j + 1);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z = z ^ (z >> 31);
+    return z % _n_folds;
   }
 
 private:
@@ -117,6 +184,10 @@ private:
   bool _missing[256];            // whether each byte means "missing"
   std::vector<double> _n;        // number of trials of each individual
   std::vector<double> _scale;    // dosage scale of each individual
+  int _cv_mode;                  // CV_NONE, CV_TRAIN or CV_HELD_OUT
+  uint64_t _cv_fold;             // the masked (or scored) fold
+  uint64_t _n_folds;             // number of folds
+  uint64_t _cv_seed;             // seed of the fold assignment
 };
 
 #endif
