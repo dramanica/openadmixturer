@@ -1,0 +1,8 @@
+linters: linters_with_defaults(
+    return_linter = NULL,
+    pipe_consistency_linter = NULL
+  )
+exclusions: list(
+    "R/RcppExports.R"
+  )
+encoding: "UTF-8"
