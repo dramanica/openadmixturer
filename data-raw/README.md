@@ -119,4 +119,7 @@ version control), and need `openadmixturer` to be installed (timings from
   log-likelihood (compare with -15,552,193.9 reported by OpenADMIXTURE.jl);
 - `compare_admixture.R`: compares a run of `gt_openadmixture()` with a live
   run of ADMIXTURE (via `tidypopgen::gt_admixture()`);
-- `profile_eur.R`: times the individual C++ kernels.
+- `profile_eur.R`: times the individual C++ kernels;
+- `benchmark_admixture.R`: times `gt_openadmixture()` against ADMIXTURE
+  (single-threaded, K = 2 to 4, about 5 minutes of ADMIXTURE runs), writing
+  the results to `benchmark_admixture.csv`.
