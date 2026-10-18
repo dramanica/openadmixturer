@@ -69,28 +69,30 @@ P gives the frequency of the **alternate** allele of each locus.
 ## Validation
 
 Two sets of tests compare `openadmixturer` with the original implementations.
-Both run as part of the test suite when the external program is available,
-and are skipped otherwise (e.g. on CRAN or on CI machines without them).
+Neither OpenADMIXTURE.jl nor ADMIXTURE is under active development, so their
+results are computed once, by scripts in `data-raw/`, and stored as fixtures
+in `tests/testthat/fixtures/`; the tests compare with these fixtures, so they
+need neither Julia nor ADMIXTURE.
 
 - `tests/testthat/test_julia.R` compares the implementation with
-  OpenADMIXTURE.jl step by step: starting from the same values of Q and P,
-  the log-likelihood, an EM step, the Newton updates of Q and P, and the
-  whole quasi-Newton algorithm (iteration by iteration) agree to numerical
-  precision. The only difference is the documented normalisation of the EM
-  update of Q when genotypes are missing. Julia and OpenADMIXTURE.jl can be
-  installed in a dedicated conda environment with
-  `bash data-raw/setup_julia_env.sh`.
+  OpenADMIXTURE.jl step by step on simulated data with missing genotypes:
+  starting from the same values of Q and P, the log-likelihood, an EM step,
+  the Newton updates of Q and P, and the whole quasi-Newton algorithm
+  (iteration by iteration) agree to numerical precision. The only difference
+  is the documented normalisation of the EM update of Q when genotypes are
+  missing. The fixtures are created by
+  `Rscript data-raw/regenerate_julia_fixtures.R`, which needs Julia with
+  OpenADMIXTURE.jl; these can be installed in a dedicated conda environment
+  with `bash data-raw/setup_julia_env.sh`.
 - `tests/testthat/test_admixture.R` compares the results with ADMIXTURE on
   the `EUR_subset` data used in the OpenADMIXTURE.jl tests (379 individuals,
   54,051 SNPs), for K = 2 to 4: log-likelihoods, Q and P agree, and the
-  estimates of ADMIXTURE are a fixed point of `gt_openadmixture()`.
-  ADMIXTURE is no longer developed and the data do not change, so its
-  estimates are stored in `tests/testthat/fixtures/admixture_eur.rds`
-  rather than recomputed; the data are downloaded automatically (and
-  checked against the checksums stored with the estimates). The fixtures
-  can be regenerated with `Rscript data-raw/regenerate_admixture_fixtures.R`
-  (ADMIXTURE can be installed with `Rscript data-raw/setup_admixture.R`, via
-  `tidygenclust`).
+  estimates of ADMIXTURE are a fixed point of `gt_openadmixture()`. The data
+  are downloaded automatically (and checked against the checksums stored
+  with the fixtures), so this test is skipped when offline. The fixtures are
+  created by `Rscript data-raw/regenerate_admixture_fixtures.R`, which needs
+  ADMIXTURE (it can be installed with `Rscript data-raw/setup_admixture.R`,
+  via `tidygenclust`).
 
 The scripts in `data-raw/` reproduce the timings reported below; run
 `data-raw/download_eur_subset.R` first to download the data. On

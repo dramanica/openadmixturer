@@ -19,7 +19,7 @@
 # fixtures/admixture_eur.rds, created by
 # data-raw/regenerate_admixture_fixtures.R. The data themselves are
 # downloaded the first time they are needed (see eur_subset_bed() in
-# helper-external.R), so the tests are skipped without an internet
+# helper-admixture.R), so the tests are skipped without an internet
 # connection.
 
 skip_on_cran()

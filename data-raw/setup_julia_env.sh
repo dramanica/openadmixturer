@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Create the conda environment used by tests/testthat/test_julia.R to compare
-# openadmixturer with OpenADMIXTURE.jl.
+# Create the conda environment used by data-raw/regenerate_julia_fixtures.R to
+# run OpenADMIXTURE.jl and store its results for tests/testthat/test_julia.R
+# (the tests themselves do not need Julia).
 #
 # Julia and all its packages live inside the conda environment (the
 # conda-forge julia package points JULIA_DEPOT_PATH at

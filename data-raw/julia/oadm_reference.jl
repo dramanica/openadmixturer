@@ -1,7 +1,14 @@
-# Reference computations with OpenADMIXTURE.jl, used by test_julia.R.
+# Reference computations with OpenADMIXTURE.jl, run by
+# data-raw/regenerate_julia_fixtures.R to create the fixtures used by
+# tests/testthat/test_julia.R.
 #
 # Usage:
-#   julia oadm_reference.jl <bed file> <q0 csv> <p0 csv> <output dir> <n_iter>
+#   julia --threads=1,0 oadm_reference.jl <bed file> <q0 csv> <p0 csv> \
+#     <output dir> <n_iter>
+#
+# (--threads=1,0 starts Julia with a single thread and no interactive thread
+# pool: OpenADMIXTURE.jl indexes its per-thread buffers with threadid(), which
+# breaks with the interactive thread added by default since Julia 1.12.)
 #
 # q0 (K x I) and p0 (K x J) are the starting values, written by R as plain
 # comma-separated matrices. Starting from them, we call the internal functions
