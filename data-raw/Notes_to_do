@@ -1,0 +1,28 @@
+Open items for openadmixturer
+
+**Performance**
+- **Multi-core scaling:** on EUR_subset the full fit speeds up only about 2.1× on 4 cores, against about 3.5× for the C++ kernels alone. I haven't tracked down why.
+- **Tuning from the original plan:** tile size and OpenMP schedule were left as the agent set them, and the optional in-memory copy of the subset was never built.
+
+**Missing features**
+- **Bootstrap / standard errors:** Julia doesn't have these either, but ADMIXTURE does.
+- **Supervised analyses:** ADMIXTURE can fix the ancestry of individuals of known origin; we only offer a fixed reference panel (`init_p` + `fix_p`).
+- **AIM selection (SKFR):** not planned; loci can be selected beforehand with `tidypopgen::select_loci()`.
+
+**Waiting on tidypopgen PR #211**
+- Once it's merged, the vignette's P comparison can become real, executed code (flip ADMIXTURE's P with 1 − P and match columns). Right now it's an `eval = FALSE` example.
+
+**Known solver behaviour, documented but not changed**
+- **Return code at vertex solutions:** the QP solver can cycle at a vertex and return 0 even though the step is right. Likely cause: entries sitting exactly at the 1e-5 floor are treated as being on the bound. The kernels ignore the return code, so results are fine, but the code is useless as a failure signal.
+- **EM output not clamped:** EM can return p of exactly 0 or 1; this only happens at monomorphic loci, so in practice it's harmless.
+
+**Housekeeping**
+- **CI and website:** the package has no GitHub Actions workflows (R CMD check, lint, coverage) and no pkgdown site, unlike tidypopgen.
+- **P format:** we return P as a named matrix, while `gt_admixture()` returns a data.frame. Methods seem fine with both, but it's a small inconsistency.
+- **Slow local tests:** `devtools::test()` compiles the C++ without optimisation, so test_admixture.R (EUR_subset, K = 2-4 with cross-validation) takes several minutes; under `R CMD check` the whole suite takes about 3 minutes.
+
+**Done**
+- Robustness fixes (numerical safeguards), merged and pushed.
+- Step-by-step comparison with OpenADMIXTURE.jl (tests/testthat/test_julia.R, with stored fixtures).
+- Comparison with ADMIXTURE on EUR_subset (tests/testthat/test_admixture.R, with stored fixtures).
+- Cross-validation as in ADMIXTURE (`crossval = TRUE`), agreeing with ADMIXTURE's CV errors to within 0.02%.
